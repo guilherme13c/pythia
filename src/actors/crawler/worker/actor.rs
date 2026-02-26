@@ -12,6 +12,7 @@ use super::messages::WorkerMessage;
 use super::state::WorkerState;
 use crate::actors::crawler::manager::messages::ManagerMessage;
 use crate::actors::crawler::manager::state::DomainMetadata;
+use crate::actors::processor::messages::ProcessorMessage;
 
 fn get_shard_index(domain: &str, num_shards: usize) -> usize {
     let mut hasher = DefaultHasher::new();
@@ -27,13 +28,13 @@ impl Actor for WorkerActor {
     type Arguments = (
         Vec<ActorRef<ManagerMessage>>,
         ActorRef<ManagerMessage>,
-        // ActorRef<ProcessorMessage>,
+        ActorRef<ProcessorMessage>,
     );
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (manager_cluster, primary_manager /* processor_ref */): Self::Arguments,
+        (manager_cluster, primary_manager, processor_ref): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Worker Actor starting up...");
 
@@ -49,7 +50,7 @@ impl Actor for WorkerActor {
             http_client: client,
             manager_cluster: manager_cluster,
             primary_manager: primary_manager,
-            // processor: processor_ref,
+            processor: processor_ref,
         })
     }
 
@@ -104,7 +105,7 @@ impl Actor for WorkerActor {
                                 }
                             }
 
-                            let _raw_text =
+                            let raw_text =
                                 document.root_element().text().collect::<Vec<_>>().join(" ");
 
                             debug!("Extracted links and text from {}", url_str);
@@ -113,10 +114,10 @@ impl Actor for WorkerActor {
                                 let _ = state.manager_cluster[shard_idx]
                                     .cast(ManagerMessage::AddUrls(urls));
                             }
-                            // let _ = state.processor.cast(ProcessorMessage::ProcessRawDocument {
-                            //     url: url_str.clone(),
-                            //     raw_text
-                            // });
+                            let _ = state.processor.cast(ProcessorMessage::ProcessDocument {
+                                url: url_str.clone(),
+                                raw_text,
+                            });
                         }
                     }
                     Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
