@@ -4966,6 +4966,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "fastembed",
+ "futures",
  "lancedb",
  "ractor",
  "reqwest 0.13.2",
