@@ -48,8 +48,8 @@ impl Actor for WorkerActor {
 
         Ok(WorkerState {
             http_client: client,
-            manager_cluster: manager_cluster,
-            primary_manager: primary_manager,
+            manager_cluster,
+            primary_manager,
             processor: processor_ref,
         })
     }
@@ -83,23 +83,23 @@ impl Actor for WorkerActor {
 
                             if let Ok(base_url) = Url::parse(&url_str) {
                                 for element in document.select(&link_selector) {
-                                    if let Some(href) = element.value().attr("href") {
-                                        if let Ok(mut absolute_url) = base_url.join(href) {
-                                            absolute_url.set_fragment(None);
+                                    if let Some(href) = element.value().attr("href")
+                                        && let Ok(mut absolute_url) = base_url.join(href)
+                                    {
+                                        absolute_url.set_fragment(None);
 
-                                            if absolute_url.scheme() == "http"
-                                                || absolute_url.scheme() == "https"
-                                            {
-                                                let target_domain =
-                                                    absolute_url.host_str().unwrap_or("unknown");
-                                                let target_shard =
-                                                    get_shard_index(target_domain, num_shards);
+                                        if absolute_url.scheme() == "http"
+                                            || absolute_url.scheme() == "https"
+                                        {
+                                            let target_domain =
+                                                absolute_url.host_str().unwrap_or("unknown");
+                                            let target_shard =
+                                                get_shard_index(target_domain, num_shards);
 
-                                                routed_links
-                                                    .entry(target_shard)
-                                                    .or_default()
-                                                    .push(absolute_url.to_string());
-                                            }
+                                            routed_links
+                                                .entry(target_shard)
+                                                .or_default()
+                                                .push(absolute_url.to_string());
                                         }
                                     }
                                 }
@@ -178,16 +178,15 @@ impl Actor for WorkerActor {
                                         if !path.is_empty() {
                                             metadata.allowed_paths.push(path);
                                         }
-                                    } else if lower_line.starts_with("crawl-delay:") {
-                                        if let Ok(delay_secs) =
+                                    } else if lower_line.starts_with("crawl-delay:")
+                                        && let Ok(delay_secs) =
                                             clean_line[12..].trim().parse::<u64>()
-                                        {
-                                            metadata.crawl_delay = Duration::from_secs(delay_secs);
-                                            debug!(
-                                                "Found custom crawl delay for {}: {}s",
-                                                domain, delay_secs
-                                            );
-                                        }
+                                    {
+                                        metadata.crawl_delay = Duration::from_secs(delay_secs);
+                                        debug!(
+                                            "Found custom crawl delay for {}: {}s",
+                                            domain, delay_secs
+                                        );
                                     }
                                 }
                             }

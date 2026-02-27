@@ -61,7 +61,7 @@ impl Actor for ManagerActor {
 
                         let domain = match parsed_url.host_str() {
                             Some(d) => d.to_string(),
-                            None => continue,
+                            _ => continue,
                         };
 
                         let path = parsed_url.path();

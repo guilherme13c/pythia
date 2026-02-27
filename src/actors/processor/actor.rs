@@ -1,6 +1,6 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use super::messages::ProcessorMessage;
 use super::state::ProcessorState;
@@ -89,7 +89,7 @@ impl Actor for ProcessorActor {
                         });
                     }
                     Err(e) => {
-                        tracing::error!("Failed to generate embeddings for {}: {}", url, e);
+                        error!("Failed to generate embeddings for {}: {}", url, e);
                     }
                 }
             }

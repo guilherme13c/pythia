@@ -1,6 +1,7 @@
-use arrow::datatypes::{Field, Schema, DataType, Float32Type};
-use arrow::array::{FixedSizeListArray, StringArray };
-use arrow::record_batch::{ RecordBatchIterator, RecordBatch };
+use tracing::{error, info};
+use arrow::array::{FixedSizeListArray, StringArray};
+use arrow::datatypes::{DataType, Field, Float32Type, Schema};
+use arrow::record_batch::{RecordBatch, RecordBatchIterator};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ impl Actor for IndexerActor {
         _myself: ActorRef<Self::Msg>,
         _args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        tracing::info!("Starting Vector DB Indexer...");
+        info!("Starting Vector DB Indexer...");
 
         let db = lancedb::connect("data/pythia-vectors")
             .execute()
@@ -39,11 +40,11 @@ impl Actor for IndexerActor {
         let table_name = "search_index";
         let table = match db.open_table(table_name).execute().await {
             Ok(t) => {
-                tracing::info!("Found existing vector table.");
+                info!("Found existing vector table.");
                 t
             }
             Err(_) => {
-                tracing::info!("Creating new vector table from scratch...");
+                info!("Creating new vector table from scratch...");
                 db.create_empty_table(table_name, schema.clone())
                     .execute()
                     .await
@@ -91,9 +92,9 @@ impl Actor for IndexerActor {
                 let batches = RecordBatchIterator::new(vec![Ok(batch)], schema);
                 match state.table.add(Box::new(batches)).execute().await {
                     Ok(_) => {
-                        tracing::info!("Successfully saved {} vectors to DB for {}", num_rows, url)
+                        info!("Successfully saved {} vectors to DB for {}", num_rows, url)
                     }
-                    Err(e) => tracing::error!("Database error inserting {}: {}", url, e),
+                    Err(e) => error!("Database error inserting {}: {}", url, e),
                 }
             }
         }

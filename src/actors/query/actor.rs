@@ -64,7 +64,7 @@ impl Actor for QueryActor {
                 let query_builder = match state.table.query().nearest_to(query_vector.clone()) {
                     Ok(builder) => builder.limit(limit),
                     Err(e) => {
-                        tracing::error!("Failed to build query: {}", e);
+                        error!("Failed to build query: {}", e);
                         let _ = reply.send(vec![]);
                         return Ok(());
                     }
@@ -73,7 +73,7 @@ impl Actor for QueryActor {
                 let mut stream = match query_builder.execute().await {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::error!("Search failed: {}", e);
+                        error!("Search failed: {}", e);
                         let _ = reply.send(vec![]);
                         return Ok(());
                     }
