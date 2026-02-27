@@ -6,12 +6,14 @@ use super::messages::ProcessorMessage;
 use super::state::ProcessorState;
 use crate::actors::indexer::messages::IndexerMessage;
 
+const CHUNK_SIZE: usize = 200;
+const CHUNK_OVERLAP: usize = 50;
+
 pub struct ProcessorActor;
 
 impl ProcessorActor {
     fn clean_text(raw_text: &str) -> String {
-        let cleaned: Vec<&str> = raw_text.split_whitespace().collect();
-        cleaned.join(" ")
+        raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     fn chunk_text(clean_text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
@@ -22,6 +24,7 @@ impl ProcessorActor {
         while i < words.len() {
             let end = std::cmp::min(i + chunk_size, words.len());
             chunks.push(words[i..end].join(" "));
+
             if end == words.len() {
                 break;
             }
@@ -29,6 +32,36 @@ impl ProcessorActor {
         }
 
         chunks
+    }
+
+    fn handle_process_document(&self, state: &mut ProcessorState, url: String, raw_text: String) {
+        let clean_text = Self::clean_text(&raw_text);
+        let chunks = Self::chunk_text(&clean_text, CHUNK_SIZE, CHUNK_OVERLAP);
+
+        debug!(
+            "Processor split document {} into {} chunks. Generating embeddings...",
+            url,
+            chunks.len()
+        );
+
+        match state.embedding_model.embed(chunks.clone(), None) {
+            Ok(embeddings) => {
+                debug!(
+                    "Successfully generated {} vectors for {}",
+                    embeddings.len(),
+                    url
+                );
+
+                let _ = state.indexer.cast(IndexerMessage::StoreChunks {
+                    url,
+                    chunks,
+                    vectors: embeddings,
+                });
+            }
+            Err(e) => {
+                error!("Failed to generate embeddings for {}: {}", url, e);
+            }
+        }
     }
 }
 
@@ -65,33 +98,7 @@ impl Actor for ProcessorActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             ProcessorMessage::ProcessDocument { url, raw_text } => {
-                let clean_text = Self::clean_text(&raw_text);
-                let chunks = Self::chunk_text(&clean_text, 200, 50);
-
-                debug!(
-                    "Processor split document {} into {} chunks. Generating embeddings...",
-                    url,
-                    chunks.len()
-                );
-
-                match state.embedding_model.embed(chunks.clone(), None) {
-                    Ok(embeddings) => {
-                        debug!(
-                            "Successfully generated {} vectors for {}",
-                            embeddings.len(),
-                            url
-                        );
-
-                        let _ = state.indexer.cast(IndexerMessage::StoreChunks {
-                            url,
-                            chunks,
-                            vectors: embeddings,
-                        });
-                    }
-                    Err(e) => {
-                        error!("Failed to generate embeddings for {}: {}", url, e);
-                    }
-                }
+                self.handle_process_document(state, url, raw_text);
             }
         }
         Ok(())

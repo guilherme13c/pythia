@@ -1,4 +1,5 @@
 use arrow::array::{Float32Array, StringArray};
+use arrow::record_batch::RecordBatch;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use futures::StreamExt;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -9,6 +10,100 @@ use super::messages::{QueryMessage, SearchResult};
 use super::state::QueryState;
 
 pub struct QueryActor;
+
+impl QueryActor {
+    async fn initialize_database() -> lancedb::Table {
+        let db = lancedb::connect("data/pythia-vectors")
+            .execute()
+            .await
+            .expect("Failed to connect to LanceDB");
+
+        db.open_table("search_index")
+            .execute()
+            .await
+            .expect("Failed to open table 'search_index'")
+    }
+
+    fn initialize_model() -> TextEmbedding {
+        TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
+            .expect("Failed to initialize Embedding Model in Searcher")
+    }
+
+    fn parse_record_batch(batch: &RecordBatch) -> Vec<SearchResult> {
+        let mut results = Vec::with_capacity(batch.num_rows());
+
+        let url_array = batch
+            .column_by_name("url")
+            .expect("Missing 'url' column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Failed to downcast 'url'");
+
+        let text_array = batch
+            .column_by_name("text")
+            .expect("Missing 'text' column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("Failed to downcast 'text'");
+
+        let dist_array = batch
+            .column_by_name("_distance")
+            .expect("Missing '_distance' column")
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .expect("Failed to downcast '_distance'");
+
+        for i in 0..batch.num_rows() {
+            results.push(SearchResult {
+                url: url_array.value(i).to_string(),
+                text: text_array.value(i).to_string(),
+                distance: dist_array.value(i),
+            });
+        }
+
+        results
+    }
+
+    async fn execute_query(
+        state: &mut QueryState,
+        text: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, String> {
+        let embeddings = state
+            .embedding_model
+            .embed(vec![text.to_string()], None)
+            .map_err(|e| format!("Failed to embed query: {}", e))?;
+
+        let query_vector = &embeddings[0];
+
+        let query_builder = state
+            .table
+            .query()
+            .nearest_to(query_vector.clone())
+            .map_err(|e| format!("Failed to build query: {}", e))?
+            .limit(limit);
+
+        let mut stream = query_builder
+            .execute()
+            .await
+            .map_err(|e| format!("Search failed: {}", e))?;
+
+        let mut results = Vec::new();
+
+        while let Some(batch_result) = stream.next().await {
+            match batch_result {
+                Ok(batch) => {
+                    results.extend(Self::parse_record_batch(&batch));
+                }
+                Err(e) => {
+                    error!("Error reading batch from stream: {}", e);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+}
 
 impl Actor for QueryActor {
     type Msg = QueryMessage;
@@ -22,19 +117,8 @@ impl Actor for QueryActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Starting Searcher Actor...");
 
-        let model = TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
-            .expect("Failed to initialize Embedding Model in Searcher");
-
-        let db = lancedb::connect("data/pythia-vectors")
-            .execute()
-            .await
-            .expect("Failed to connect to LanceDB");
-
-        let table = db
-            .open_table("search_index")
-            .execute()
-            .await
-            .expect("Failed to open table 'search_index'");
+        let model = Self::initialize_model();
+        let table = Self::initialize_database().await;
 
         Ok(QueryState {
             embedding_model: model,
@@ -50,67 +134,13 @@ impl Actor for QueryActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             QueryMessage::Query { text, limit, reply } => {
-                let embeddings = match state.embedding_model.embed(vec![text.clone()], None) {
-                    Ok(emb) => emb,
+                let results = match Self::execute_query(state, &text, limit).await {
+                    Ok(res) => res,
                     Err(e) => {
-                        error!("Failed to embed query: {}", e);
-                        let _ = reply.send(vec![]);
-                        return Ok(());
+                        error!("{}", e);
+                        vec![]
                     }
                 };
-
-                let query_vector = &embeddings[0];
-
-                let query_builder = match state.table.query().nearest_to(query_vector.clone()) {
-                    Ok(builder) => builder.limit(limit),
-                    Err(e) => {
-                        error!("Failed to build query: {}", e);
-                        let _ = reply.send(vec![]);
-                        return Ok(());
-                    }
-                };
-
-                let mut stream = match query_builder.execute().await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Search failed: {}", e);
-                        let _ = reply.send(vec![]);
-                        return Ok(());
-                    }
-                };
-
-                let mut results = Vec::new();
-
-                while let Some(batch_result) = stream.next().await {
-                    if let Ok(batch) = batch_result {
-                        let url_array = batch
-                            .column_by_name("url")
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .unwrap();
-                        let text_array = batch
-                            .column_by_name("text")
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<StringArray>()
-                            .unwrap();
-                        let dist_array = batch
-                            .column_by_name("_distance")
-                            .unwrap()
-                            .as_any()
-                            .downcast_ref::<Float32Array>()
-                            .unwrap();
-
-                        for i in 0..batch.num_rows() {
-                            results.push(SearchResult {
-                                url: url_array.value(i).to_string(),
-                                text: text_array.value(i).to_string(),
-                                distance: dist_array.value(i),
-                            });
-                        }
-                    }
-                }
 
                 let _ = reply.send(results);
             }
