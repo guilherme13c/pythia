@@ -25,7 +25,6 @@ impl Actor for QueryActor {
         let model = TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
             .expect("Failed to initialize Embedding Model in Searcher");
 
-        // Connect to the same DB as the Indexer
         let db = lancedb::connect("data/pythia-vectors")
             .execute()
             .await
