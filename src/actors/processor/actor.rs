@@ -104,3 +104,48 @@ impl Actor for ProcessorActor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_clean_text_removes_messy_whitespace() {
+        let raw_html_text = "  This \n\n is   some \t\t very \n messy text.   ";
+        let cleaned = ProcessorActor::clean_text(raw_html_text);
+
+        assert_eq!(cleaned, "This is some very messy text.");
+    }
+
+    #[test]
+    fn test_chunk_text_exact_size() {
+        let text = "one two three four five";
+
+        let chunks = ProcessorActor::chunk_text(text, 5, 2);
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "one two three four five");
+    }
+
+    #[test]
+    fn test_chunk_text_sliding_window_overlap() {
+        let text = "word1 word2 word3 word4 word5 word6 word7";
+
+        let chunks = ProcessorActor::chunk_text(text, 4, 2);
+
+        assert_eq!(chunks.len(), 3, "Should create exactly 3 chunks");
+        assert_eq!(chunks[0], "word1 word2 word3 word4");
+        assert_eq!(chunks[1], "word3 word4 word5 word6");
+        assert_eq!(chunks[2], "word5 word6 word7");
+    }
+
+    #[test]
+    fn test_chunk_text_smaller_than_chunk_size() {
+        let text = "short sentence";
+
+        let chunks = ProcessorActor::chunk_text(text, 10, 5);
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "short sentence");
+    }
+}
