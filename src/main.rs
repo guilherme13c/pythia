@@ -1,20 +1,18 @@
-use ractor::Actor;
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-
 use crate::actors::crawler::manager::actor::ManagerActor;
 use crate::actors::crawler::manager::messages::ManagerMessage;
 use crate::actors::crawler::worker::actor::WorkerActor;
 use crate::actors::indexer::actor::IndexerActor;
 use crate::actors::processor::actor::ProcessorActor;
 use crate::actors::query::actor::QueryActor;
-use crate::actors::query::messages::QueryMessage;
-
+use ractor::Actor;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 use url::Url;
 
 pub mod actors;
+pub mod api;
 
 #[tokio::main]
 async fn main() {
@@ -85,28 +83,15 @@ async fn main() {
         .await
         .expect("Failed to start Searcher");
 
-    let query_ref_for_test = query_ref.clone();
+    info!("Starting REST API on http://0.0.0.0:3000");
+    let app = api::build_router(query_ref.clone());
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-
-        info!("Running test search query...");
-
-        let results = ractor::call!(query_ref_for_test, |reply| QueryMessage::Query {
-            text: "Harry Potter".to_string(),
-            limit: 3,
-            reply,
-        })
-        .expect("RPC failed");
-
-        for (i, res) in results.iter().enumerate() {
-            info!(
-                "{}. [{}] (Distance: {:.4})\n   Snippet: {}...",
-                i + 1,
-                res.url,
-                res.distance,
-                &res.text.chars().take(80).collect::<String>()
-            );
-        }
+        axum::serve(listener, app)
+            .await
+            .expect("Failed to start HTTP server");
     });
 
     info!("Pythia is running! Press Ctrl+C to stop.");
