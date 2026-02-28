@@ -44,6 +44,12 @@ impl DomainMetadata {
     }
 }
 
+impl Default for ManagerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ManagerState {
     pub fn new() -> Self {
         Self {
