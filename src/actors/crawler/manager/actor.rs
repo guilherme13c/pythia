@@ -178,3 +178,80 @@ impl Actor for ManagerActor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handle_add_urls_deduplication() {
+        let manager = ManagerActor;
+        let mut state = ManagerState::new();
+
+        let new_urls = vec![
+            "https://example.com/page1".to_string(),
+            "https://example.com/page2".to_string(),
+            "https://example.com/page1".to_string(),
+        ];
+
+        manager.handle_add_urls(&mut state, new_urls);
+
+        assert_eq!(state.frontier.len(), 2);
+        assert_eq!(state.seen_urls.len(), 2);
+    }
+
+    #[test]
+    fn test_handle_rate_limited_exponential_backoff() {
+        let manager = ManagerActor;
+        let mut state = ManagerState::new();
+        let domain = "wikipedia.org".to_string();
+        let url = "https://wikipedia.org/page1".to_string();
+
+        manager.handle_rate_limited(&mut state, domain.clone(), url.clone());
+
+        let metadata = state.domain_metadata.get(&domain).unwrap();
+        assert_eq!(metadata.consecutive_errors, 1);
+
+        manager.handle_rate_limited(&mut state, domain.clone(), url.clone());
+        let metadata = state.domain_metadata.get(&domain).unwrap();
+        assert_eq!(metadata.consecutive_errors, 2);
+
+        manager.handle_rate_limited(&mut state, domain.clone(), url.clone());
+        let metadata = state.domain_metadata.get(&domain).unwrap();
+        assert_eq!(metadata.consecutive_errors, 3);
+
+        assert_eq!(state.frontier.len(), 3);
+    }
+
+    #[test]
+    fn test_handle_crawl_success_clears_penalty() {
+        let manager = ManagerActor;
+        let mut state = ManagerState::new();
+        let domain = "wikipedia.org".to_string();
+        let url = "https://wikipedia.org/page1".to_string();
+
+        manager.handle_rate_limited(&mut state, domain.clone(), url.clone());
+        assert_eq!(
+            state
+                .domain_metadata
+                .get(&domain)
+                .unwrap()
+                .consecutive_errors,
+            1
+        );
+        assert!(
+            state
+                .domain_metadata
+                .get(&domain)
+                .unwrap()
+                .backoff_until
+                .is_some()
+        );
+
+        manager.handle_crawl_success(&mut state, domain.clone());
+
+        let metadata = state.domain_metadata.get(&domain).unwrap();
+        assert_eq!(metadata.consecutive_errors, 0);
+        assert!(metadata.backoff_until.is_none());
+    }
+}

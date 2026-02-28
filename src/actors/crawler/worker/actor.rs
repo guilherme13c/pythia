@@ -220,7 +220,10 @@ fn extract_links_and_text(
 fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
     let mut metadata = DomainMetadata::default_unfetched();
     metadata.rules_fetched = true;
+
     let mut in_target_user_agent = false;
+    let mut found_specific_bot = false;
+    let mut is_parsing_rules = false;
 
     for line in text.lines() {
         let clean_line = line.split('#').next().unwrap_or("").trim();
@@ -231,30 +234,140 @@ fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
         let lower_line = clean_line.to_lowercase();
 
         if lower_line.starts_with("user-agent:") {
+            if is_parsing_rules {
+                in_target_user_agent = false;
+                is_parsing_rules = false;
+            }
+
             let agent = lower_line.trim_start_matches("user-agent:").trim();
-            in_target_user_agent = agent == "*" || agent.contains("pythiasearchbot");
+
+            if agent.contains("pythiasearchbot") {
+                in_target_user_agent = true;
+                if !found_specific_bot {
+                    metadata.disallowed_paths.clear();
+                    metadata.allowed_paths.clear();
+                    metadata.crawl_delay = Duration::from_secs(2);
+                    found_specific_bot = true;
+                }
+            } else if agent == "*" {
+                if !found_specific_bot {
+                    in_target_user_agent = true;
+                }
+            }
             continue;
         }
 
-        if in_target_user_agent {
-            if lower_line.starts_with("disallow:") {
-                let path = clean_line[9..].trim().to_string();
-                if !path.is_empty() {
-                    metadata.disallowed_paths.push(path);
+        if lower_line.starts_with("disallow:")
+            || lower_line.starts_with("allow:")
+            || lower_line.starts_with("crawl-delay:")
+        {
+            is_parsing_rules = true;
+
+            if in_target_user_agent {
+                if lower_line.starts_with("disallow:") {
+                    let path = clean_line[9..].trim().to_string();
+                    if !path.is_empty() {
+                        metadata.disallowed_paths.push(path);
+                    }
+                } else if lower_line.starts_with("allow:") {
+                    let path = clean_line[6..].trim().to_string();
+                    if !path.is_empty() {
+                        metadata.allowed_paths.push(path);
+                    }
+                } else if lower_line.starts_with("crawl-delay:")
+                    && let Ok(delay_secs) = clean_line[12..].trim().parse::<u64>()
+                {
+                    metadata.crawl_delay = Duration::from_secs(delay_secs);
+                    debug!("Found custom crawl delay for {}: {}s", domain, delay_secs);
                 }
-            } else if lower_line.starts_with("allow:") {
-                let path = clean_line[6..].trim().to_string();
-                if !path.is_empty() {
-                    metadata.allowed_paths.push(path);
-                }
-            } else if lower_line.starts_with("crawl-delay:")
-                && let Ok(delay_secs) = clean_line[12..].trim().parse::<u64>()
-            {
-                metadata.crawl_delay = Duration::from_secs(delay_secs);
-                debug!("Found custom crawl delay for {}: {}s", domain, delay_secs);
             }
         }
     }
 
     metadata
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_parse_robots_txt_universal_rules() {
+        let robots_content = "
+            # This is a comment
+            User-agent: *
+            Disallow: /admin/ # inline comment
+            Crawl-delay: 5
+            
+            User-agent: googlebot
+            Disallow: /secret/
+        ";
+
+        let metadata = parse_robots_txt(robots_content, "example.com");
+
+        assert!(metadata.rules_fetched);
+        assert_eq!(metadata.crawl_delay, Duration::from_secs(5));
+        assert_eq!(metadata.disallowed_paths, vec!["/admin/"]);
+        assert!(!metadata.disallowed_paths.contains(&"/secret/".to_string()));
+    }
+
+    #[test]
+    fn test_parse_robots_txt_specific_bot_rules() {
+        let robots_content = "
+            User-agent: *
+            Disallow: /everything/
+            
+            User-agent: PythiaSearchBot
+            Allow: /everything/
+            Disallow: /just-one-thing/
+        ";
+
+        let metadata = parse_robots_txt(robots_content, "example.com");
+
+        assert_eq!(metadata.allowed_paths, vec!["/everything/"]);
+        assert_eq!(metadata.disallowed_paths, vec!["/just-one-thing/"]);
+    }
+
+    #[test]
+    fn test_extract_links_and_text() {
+        let html = r#"
+            <html>
+                <body>
+                    <p>Hello world!</p>
+                    <a href="/about">About Us</a>
+                    <a href="https://other.com/page">External</a>
+                    <a href="mailto:test@example.com">Email</a>
+                    <a href="/faq#section1">FAQ</a>
+                </body>
+            </html>
+        "#;
+
+        let base_url = "https://example.com/home";
+        let num_shards = 3;
+
+        let (routed_links, raw_text) = extract_links_and_text(html, base_url, num_shards);
+
+        assert!(raw_text.contains("Hello world!"));
+        assert!(raw_text.contains("About Us"));
+
+        let mut all_links = Vec::new();
+        for urls in routed_links.values() {
+            all_links.extend(urls.clone());
+        }
+
+        assert_eq!(all_links.len(), 3);
+        assert!(all_links.contains(&"https://example.com/about".to_string()));
+        assert!(all_links.contains(&"https://other.com/page".to_string()));
+        assert!(all_links.contains(&"https://example.com/faq".to_string()));
+    }
+
+    #[test]
+    fn test_get_shard_index_determinism() {
+        let domain = "wikipedia.org";
+        let shard1 = get_shard_index(domain, 5);
+        let shard2 = get_shard_index(domain, 5);
+
+        assert_eq!(shard1, shard2);
+    }
 }
