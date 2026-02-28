@@ -13,11 +13,14 @@ use url::Url;
 
 pub mod actors;
 pub mod api;
+pub mod config;
 
 #[tokio::main]
 async fn main() {
+    let app_config = config::Config::load();
+
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new("info"))
+        .with_env_filter(EnvFilter::new(&app_config.log_level))
         .init();
 
     info!("Starting Pythia Search Engine...");
@@ -34,11 +37,9 @@ async fn main() {
     .await
     .expect("Failed to start Processor");
 
-    let num_shards = 3;
-    let workers_per_shard = 3;
     let mut manager_cluster = Vec::new();
 
-    for i in 0..num_shards {
+    for i in 0..app_config.num_shards {
         let name = format!("manager-{}", i);
         let (manager_ref, _) = Actor::spawn(Some(name), ManagerActor, ())
             .await
@@ -47,7 +48,7 @@ async fn main() {
     }
 
     for (shard_idx, primary_manager) in manager_cluster.iter().enumerate() {
-        for w in 1..=workers_per_shard {
+        for w in 1..=app_config.workers_per_shard {
             let worker_name = format!("worker-{}-{}", shard_idx, w);
             Actor::spawn(
                 Some(worker_name),
@@ -63,18 +64,14 @@ async fn main() {
         }
     }
 
-    info!("Injecting seed URLs...");
-    let seeds = vec![
-        "https://quotes.toscrape.com/".to_string(),
-        "https://books.toscrape.com/".to_string(),
-        "https://en.wikipedia.com/".to_string(),
-    ];
+    info!("Injecting seed URLs from {}...", app_config.seeds_file);
+    let seeds = app_config.load_seeds();
 
     for seed in seeds {
         let domain = Url::parse(&seed).unwrap().host_str().unwrap().to_string();
         let mut hasher = DefaultHasher::new();
         domain.hash(&mut hasher);
-        let shard_idx = (hasher.finish() as usize) % num_shards;
+        let shard_idx = (hasher.finish() as usize) % app_config.num_shards;
 
         let _ = manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(vec![seed]));
     }
@@ -83,10 +80,11 @@ async fn main() {
         .await
         .expect("Failed to start Searcher");
 
-    info!("Starting REST API on http://0.0.0.0:3000");
-    let app = api::build_router(query_ref.clone());
+    let bind_addr = format!("{}:{}", app_config.host, app_config.port);
+    info!("Starting REST API on http://{}", bind_addr);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let app = api::build_router(query_ref.clone());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
 
     tokio::spawn(async move {
         axum::serve(listener, app)
@@ -94,6 +92,10 @@ async fn main() {
             .expect("Failed to start HTTP server");
     });
 
+    info!("Pythia is running! Press Ctrl+C to stop.");
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to listen for Ctrl+C");
     info!("Pythia is running! Press Ctrl+C to stop.");
     tokio::signal::ctrl_c()
         .await

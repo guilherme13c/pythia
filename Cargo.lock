@@ -1983,6 +1983,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "downcast-rs"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5065,15 +5071,19 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "axum",
+ "dotenvy",
  "fastembed",
  "futures",
+ "http-body-util",
  "lancedb",
  "ractor",
  "reqwest 0.13.2",
  "scraper",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "url",
