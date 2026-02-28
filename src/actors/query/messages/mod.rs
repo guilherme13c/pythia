@@ -1,6 +1,7 @@
 use ractor::RpcReplyPort;
+use serde::Serialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
     pub url: String,
     pub text: String,
