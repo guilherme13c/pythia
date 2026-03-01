@@ -15,5 +15,6 @@ pub enum ManagerMessage {
     },
     CrawlSuccess {
         domain: String,
+        url: String,
     },
 }

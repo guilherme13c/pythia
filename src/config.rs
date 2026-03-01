@@ -11,6 +11,8 @@ pub struct Config {
     pub seeds_file: String,
     pub processor_pool_size: usize,
     pub query_pool_size: usize,
+    pub bloom_filter_capacity: usize,
+    pub bloom_filter_fp_rate: f64,
 }
 
 impl Config {
@@ -53,6 +55,16 @@ impl Config {
                 .unwrap_or_else(|_| "4".to_string())
                 .parse()
                 .expect("QUERY_POOL_SIZE must be a number"),
+
+            bloom_filter_capacity: env::var("BLOOM_FILTER_CAPACITY")
+                .unwrap_or_else(|_| "10000000".to_string())
+                .parse()
+                .expect("BLOOM_FILTER_CAPACITY must be a number"),
+
+            bloom_filter_fp_rate: env::var("BLOOM_FILTER_FP_RATE")
+                .unwrap_or_else(|_| "0.001".to_string())
+                .parse()
+                .expect("BLOOM_FILTER_FP_RATE must be a float"),
         }
     }
 
@@ -95,6 +107,8 @@ mod tests {
             seeds_file: temp_file.path().to_str().unwrap().to_string(),
             processor_pool_size: 4,
             query_pool_size: 4,
+            bloom_filter_capacity: 100000,
+            bloom_filter_fp_rate: 0.001,
         };
 
         let seeds = config.load_seeds();
