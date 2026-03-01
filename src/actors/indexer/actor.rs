@@ -23,8 +23,9 @@ impl IndexerActor {
         ]))
     }
 
-    async fn initialize_database() -> lancedb::Table {
-        let db = lancedb::connect("data/pythia-vectors")
+    async fn initialize_database(shard_idx: usize) -> lancedb::Table {
+        let db_path = format!("data/pythia-vectors-{}", shard_idx);
+        let db = lancedb::connect(&db_path)
             .execute()
             .await
             .expect("Failed to connect to LanceDB");
@@ -34,11 +35,11 @@ impl IndexerActor {
 
         match db.open_table(table_name).execute().await {
             Ok(t) => {
-                info!("Found existing vector table.");
+                info!("Found existing vector table for shard {}.", shard_idx);
                 t
             }
             Err(_) => {
-                info!("Creating new vector table from scratch...");
+                info!("Creating new vector table for shard {}...", shard_idx);
                 db.create_empty_table(table_name, schema)
                     .execute()
                     .await
@@ -63,11 +64,9 @@ impl IndexerActor {
             .map(|v| Some(v.into_iter().map(Some).collect()))
             .collect();
 
-        let vector_array = Arc::new(FixedSizeListArray::from_iter_primitive::<
-            Float32Type,
-            _,
-            _,
-        >(vector_lists, 384));
+        let vector_array = Arc::new(
+            FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(vector_lists, 384),
+        );
 
         RecordBatch::try_new(schema, vec![url_array, text_array, vector_array])
     }
@@ -108,16 +107,16 @@ impl IndexerActor {
 impl Actor for IndexerActor {
     type Msg = IndexerMessage;
     type State = IndexerState;
-    type Arguments = ();
+    type Arguments = usize;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _args: Self::Arguments,
+        shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Starting Vector DB Indexer...");
 
-        let table = Self::initialize_database().await;
+        let table = Self::initialize_database(shard_idx).await;
 
         Ok(IndexerState { table })
     }
@@ -129,7 +128,11 @@ impl Actor for IndexerActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            IndexerMessage::StoreChunks { url, chunks, vectors } => {
+            IndexerMessage::StoreChunks {
+                url,
+                chunks,
+                vectors,
+            } => {
                 self.handle_store_chunks(state, url, chunks, vectors).await;
             }
         }

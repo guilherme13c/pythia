@@ -3,5 +3,5 @@ use lancedb::Table;
 
 pub struct QueryState {
     pub embedding_model: TextEmbedding,
-    pub table: Table,
+    pub tables: Vec<Table>,
 }

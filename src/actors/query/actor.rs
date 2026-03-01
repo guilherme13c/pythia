@@ -12,16 +12,32 @@ use super::state::QueryState;
 pub struct QueryActor;
 
 impl QueryActor {
-    async fn initialize_database() -> lancedb::Table {
-        let db = lancedb::connect("data/pythia-vectors")
-            .execute()
-            .await
-            .expect("Failed to connect to LanceDB");
+    async fn initialize_databases(num_shards: usize) -> Vec<lancedb::Table> {
+        let mut tables = Vec::new();
 
-        db.open_table("search_index")
-            .execute()
-            .await
-            .expect("Failed to open table 'search_index'")
+        for i in 0..num_shards {
+            let db_path = format!("data/pythia-vectors-{}", i);
+            let db = lancedb::connect(&db_path)
+                .execute()
+                .await
+                .expect("Failed to connect to LanceDB");
+
+            let mut retries = 0;
+            let table = loop {
+                match db.open_table("search_index").execute().await {
+                    Ok(t) => break t,
+                    Err(e) => {
+                        if retries > 10 {
+                            panic!("Failed to open table for shard {}: {}", i, e);
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        retries += 1;
+                    }
+                }
+            };
+            tables.push(table);
+        }
+        tables
     }
 
     fn initialize_model() -> TextEmbedding {
@@ -76,53 +92,65 @@ impl QueryActor {
 
         let query_vector = &embeddings[0];
 
-        let query_builder = state
-            .table
-            .query()
-            .nearest_to(query_vector.clone())
-            .map_err(|e| format!("Failed to build query: {}", e))?
-            .limit(limit);
+        let mut futures = Vec::new();
+        for table in &state.tables {
+            let query_builder = table
+                .query()
+                .nearest_to(query_vector.clone())
+                .map_err(|e| format!("Failed to build query: {}", e))?
+                .limit(limit);
 
-        let mut stream = query_builder
-            .execute()
-            .await
-            .map_err(|e| format!("Search failed: {}", e))?;
-
-        let mut results = Vec::new();
-
-        while let Some(batch_result) = stream.next().await {
-            match batch_result {
-                Ok(batch) => {
-                    results.extend(Self::parse_record_batch(&batch));
+            futures.push(async move {
+                let mut stream = query_builder.execute().await.map_err(|e| e.to_string())?;
+                let mut shard_results = Vec::new();
+                while let Some(batch_result) = stream.next().await {
+                    if let Ok(batch) = batch_result {
+                        shard_results.extend(Self::parse_record_batch(&batch));
+                    }
                 }
-                Err(e) => {
-                    error!("Error reading batch from stream: {}", e);
-                }
+                Ok::<Vec<SearchResult>, String>(shard_results)
+            });
+        }
+
+        let shard_results = futures::future::join_all(futures).await;
+
+        let mut all_results = Vec::new();
+        for res in shard_results {
+            if let Ok(results) = res {
+                all_results.extend(results);
             }
         }
 
-        Ok(results)
+        all_results.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        all_results.truncate(limit);
+
+        Ok(all_results)
     }
 }
 
 impl Actor for QueryActor {
     type Msg = QueryMessage;
     type State = QueryState;
-    type Arguments = ();
+    type Arguments = usize;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _args: Self::Arguments,
+        num_shards: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Starting Searcher Actor...");
 
         let model = Self::initialize_model();
-        let table = Self::initialize_database().await;
+        let tables = Self::initialize_databases(num_shards).await;
 
         Ok(QueryState {
             embedding_model: model,
-            table,
+            tables,
         })
     }
 

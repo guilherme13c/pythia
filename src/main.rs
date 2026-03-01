@@ -31,14 +31,19 @@ async fn main() {
 
     info!("Starting Pythia Search Engine...");
 
-    let (indexer_ref, _) = Actor::spawn(Some("indexer".to_string()), IndexerActor, ())
-        .await
-        .expect("Failed to start Indexer");
+    let mut indexer_cluster = Vec::new();
+    for i in 0..app_config.num_shards {
+        let name = format!("indexer-{}", i);
+        let (indexer_ref, _) = Actor::spawn(Some(name), IndexerActor, i)
+            .await
+            .expect("Failed to start Indexer");
+        indexer_cluster.push(indexer_ref);
+    }
 
     let mut processor_pool = Vec::new();
     for i in 0..app_config.processor_pool_size {
         let name = format!("processor-{}", i);
-        let (processor_ref, _) = Actor::spawn(Some(name), ProcessorActor, indexer_ref.clone())
+        let (processor_ref, _) = Actor::spawn(Some(name), ProcessorActor, indexer_cluster.clone())
             .await
             .expect("Failed to start Processor");
         processor_pool.push(processor_ref);
@@ -86,7 +91,7 @@ async fn main() {
     let mut query_pool = Vec::new();
     for i in 0..app_config.query_pool_size {
         let name = format!("query-{}", i);
-        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, ())
+        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, app_config.num_shards)
             .await
             .expect("Failed to start Searcher");
         query_pool.push(query_ref);
@@ -111,7 +116,9 @@ async fn main() {
 
     info!("Shutdown signal received! Stopping actors gracefully...");
 
-    indexer_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    for indexer_ref in indexer_cluster {
+        indexer_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    }
     for processor_ref in processor_pool {
         processor_ref.stop(Some("Ctrl+C Shutdown".to_string()));
     }

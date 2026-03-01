@@ -59,6 +59,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -87,5 +88,23 @@ mod tests {
         assert_eq!(seeds.len(), 2);
         assert_eq!(seeds[0], "https://example.com");
         assert_eq!(seeds[1], "https://rust-lang.org");
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        unsafe {
+            env::remove_var("HOST");
+            env::remove_var("PORT");
+            env::remove_var("NUM_SHARDS");
+            env::remove_var("PROCESSOR_POOL_SIZE");
+        }
+
+        let config = Config::load();
+
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 3000);
+        assert_eq!(config.num_shards, 3);
+        assert_eq!(config.processor_pool_size, 4);
+        assert_eq!(config.query_pool_size, 4);
     }
 }

@@ -27,6 +27,7 @@ tempfile = "3.10.1"
 tower = { version = "0.5.3", features = ["util"] }
 http-body-util = "0.1.1"
 criterion = { version = "0.8.2", features = ["async_tokio"] }
+serde_urlencoded = "0.7.1"
 
 [profile.dev.package."*"]
 opt-level = 3
