@@ -8,7 +8,7 @@ use ractor::Actor;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tracing::info;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use url::Url;
 
 pub mod actors;
@@ -19,8 +19,14 @@ pub mod config;
 async fn main() {
     let app_config = config::Config::load();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&app_config.log_level))
+    let env_filter = EnvFilter::new(&app_config.log_level);
+    let fmt_layer = tracing_subscriber::fmt::layer();
+    let console_layer = console_subscriber::spawn();
+
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(fmt_layer)
+        .with(env_filter)
         .init();
 
     info!("Starting Pythia Search Engine...");
@@ -92,10 +98,6 @@ async fn main() {
             .expect("Failed to start HTTP server");
     });
 
-    info!("Pythia is running! Press Ctrl+C to stop.");
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to listen for Ctrl+C");
     info!("Pythia is running! Press Ctrl+C to stop.");
     tokio::signal::ctrl_c()
         .await

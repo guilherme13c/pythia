@@ -1,0 +1,3 @@
+[build]
+rustc-wrapper = "sccache"
+rustflags = ["--cfg", "tokio_unstable"]
