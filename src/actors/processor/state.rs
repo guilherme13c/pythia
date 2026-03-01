@@ -4,5 +4,5 @@ use ractor::ActorRef;
 
 pub struct ProcessorState {
     pub embedding_model: TextEmbedding,
-    pub indexer: ActorRef<IndexerMessage>,
+    pub indexer_cluster: Vec<ActorRef<IndexerMessage>>,
 }

@@ -31,21 +31,27 @@ async fn main() {
 
     info!("Starting Pythia Search Engine...");
 
-    let (indexer_ref, _) = Actor::spawn(Some("indexer".to_string()), IndexerActor, ())
-        .await
-        .expect("Failed to start Indexer");
+    let mut indexer_cluster = Vec::new();
+    for i in 0..app_config.indexer_shards {
+        let name = format!("indexer-{}", i);
+        let (indexer_ref, _) = Actor::spawn(Some(name), IndexerActor, i)
+            .await
+            .expect("Failed to start Indexer");
+        indexer_cluster.push(indexer_ref);
+    }
 
-    let (processor_ref, _) = Actor::spawn(
-        Some("processor".to_string()),
-        ProcessorActor,
-        indexer_ref.clone(),
-    )
-    .await
-    .expect("Failed to start Processor");
+    let mut processor_pool = Vec::new();
+    for i in 0..app_config.processor_pool_size {
+        let name = format!("processor-{}", i);
+        let (processor_ref, _) = Actor::spawn(Some(name), ProcessorActor, indexer_cluster.clone())
+            .await
+            .expect("Failed to start Processor");
+        processor_pool.push(processor_ref);
+    }
 
     let mut manager_cluster = Vec::new();
 
-    for i in 0..app_config.num_shards {
+    for i in 0..app_config.crawler_shards {
         let name = format!("manager-{}", i);
         let (manager_ref, _) = Actor::spawn(Some(name), ManagerActor, ())
             .await
@@ -54,7 +60,7 @@ async fn main() {
     }
 
     for (shard_idx, primary_manager) in manager_cluster.iter().enumerate() {
-        for w in 1..=app_config.workers_per_shard {
+        for w in 1..=app_config.workers_per_crawler_shard {
             let worker_name = format!("worker-{}-{}", shard_idx, w);
             Actor::spawn(
                 Some(worker_name),
@@ -62,7 +68,7 @@ async fn main() {
                 (
                     manager_cluster.clone(),
                     primary_manager.clone(),
-                    processor_ref.clone(),
+                    processor_pool.clone(),
                 ),
             )
             .await
@@ -77,19 +83,24 @@ async fn main() {
         let domain = Url::parse(&seed).unwrap().host_str().unwrap().to_string();
         let mut hasher = DefaultHasher::new();
         domain.hash(&mut hasher);
-        let shard_idx = (hasher.finish() as usize) % app_config.num_shards;
+        let shard_idx = (hasher.finish() as usize) % app_config.crawler_shards;
 
         let _ = manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(vec![seed]));
     }
 
-    let (query_ref, _) = Actor::spawn(Some("query".to_string()), QueryActor, ())
-        .await
-        .expect("Failed to start Searcher");
+    let mut query_pool = Vec::new();
+    for i in 0..app_config.query_pool_size {
+        let name = format!("query-{}", i);
+        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, app_config.indexer_shards)
+            .await
+            .expect("Failed to start Searcher");
+        query_pool.push(query_ref);
+    }
 
     let bind_addr = format!("{}:{}", app_config.host, app_config.port);
     info!("Starting REST API on http://{}", bind_addr);
 
-    let app = api::build_router(query_ref.clone());
+    let app = api::build_router(query_pool.clone());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
 
     tokio::spawn(async move {
@@ -105,10 +116,15 @@ async fn main() {
 
     info!("Shutdown signal received! Stopping actors gracefully...");
 
-    processor_ref.stop(Some("Ctrl+C Shutdown".to_string()));
-    indexer_ref.stop(Some("Ctrl+C Shutdown".to_string()));
-    query_ref.stop(Some("Ctrl+C Shutdown".to_string()));
-
+    for indexer_ref in indexer_cluster {
+        indexer_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    }
+    for processor_ref in processor_pool {
+        processor_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    }
+    for query_ref in query_pool {
+        query_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    }
     for manager in manager_cluster {
         manager.stop(Some("Ctrl+C Shutdown".to_string()));
     }

@@ -5,9 +5,12 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub log_level: String,
-    pub num_shards: usize,
-    pub workers_per_shard: usize,
+    pub crawler_shards: usize,
+    pub indexer_shards: usize,
+    pub workers_per_crawler_shard: usize,
     pub seeds_file: String,
+    pub processor_pool_size: usize,
+    pub query_pool_size: usize,
 }
 
 impl Config {
@@ -16,20 +19,40 @@ impl Config {
 
         Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+
             port: env::var("PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse()
                 .expect("PORT must be a valid number"),
+
             log_level: env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
-            num_shards: env::var("NUM_SHARDS")
+
+            crawler_shards: env::var("CRAWLER_SHARDS")
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
-                .expect("NUM_SHARDS must be a valid number"),
-            workers_per_shard: env::var("WORKERS_PER_SHARD")
+                .expect("CRAWLER_SHARDS must be a valid number"),
+
+            indexer_shards: env::var("INDEXER_SHARDS")
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
-                .expect("WORKERS_PER_SHARD must be a valid number"),
+                .expect("INDEXER_SHARDS must be a valid number"),
+
+            workers_per_crawler_shard: env::var("WORKERS_PER_SHARD")
+                .unwrap_or_else(|_| "3".to_string())
+                .parse()
+                .expect("WORKERS_PER_CRAWLER_SHARD must be a valid number"),
+
             seeds_file: env::var("SEEDS_FILE").unwrap_or_else(|_| "seeds.txt".to_string()),
+
+            processor_pool_size: std::env::var("PROCESSOR_POOL_SIZE")
+                .unwrap_or_else(|_| "4".to_string())
+                .parse()
+                .expect("PROCESSOR_POOL_SIZE must be a number"),
+
+            query_pool_size: std::env::var("QUERY_POOL_SIZE")
+                .unwrap_or_else(|_| "4".to_string())
+                .parse()
+                .expect("QUERY_POOL_SIZE must be a number"),
         }
     }
 
@@ -49,6 +72,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -65,9 +89,12 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 8080,
             log_level: "info".to_string(),
-            num_shards: 1,
-            workers_per_shard: 1,
+            crawler_shards: 1,
+            indexer_shards: 1,
+            workers_per_crawler_shard: 1,
             seeds_file: temp_file.path().to_str().unwrap().to_string(),
+            processor_pool_size: 4,
+            query_pool_size: 4,
         };
 
         let seeds = config.load_seeds();
@@ -75,5 +102,25 @@ mod tests {
         assert_eq!(seeds.len(), 2);
         assert_eq!(seeds[0], "https://example.com");
         assert_eq!(seeds[1], "https://rust-lang.org");
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        unsafe {
+            env::remove_var("HOST");
+            env::remove_var("PORT");
+            env::remove_var("CRAWLER_SHARDS");
+            env::remove_var("INDEXER_SHARDS");
+            env::remove_var("PROCESSOR_POOL_SIZE");
+        }
+
+        let config = Config::load();
+
+        assert_eq!(config.host, "0.0.0.0");
+        assert_eq!(config.port, 3000);
+        assert_eq!(config.crawler_shards, 3);
+        assert_eq!(config.indexer_shards, 3);
+        assert_eq!(config.processor_pool_size, 4);
+        assert_eq!(config.query_pool_size, 4);
     }
 }

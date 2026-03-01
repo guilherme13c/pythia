@@ -1,4 +1,5 @@
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use rand::seq::IndexedRandom;
 use reqwest::Client;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
@@ -49,7 +50,12 @@ impl WorkerActor {
                             state.manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(urls));
                     }
 
-                    let _ = state.processor.cast(ProcessorMessage::ProcessDocument {
+                    let processor_ref = {
+                        let mut rng = rand::rng();
+                        state.processor_pool.choose(&mut rng).unwrap().clone()
+                    };
+
+                    let _ = processor_ref.cast(ProcessorMessage::ProcessDocument {
                         url: url_str.clone(),
                         raw_text,
                     });
@@ -122,13 +128,13 @@ impl Actor for WorkerActor {
     type Arguments = (
         Vec<ActorRef<ManagerMessage>>,
         ActorRef<ManagerMessage>,
-        ActorRef<ProcessorMessage>,
+        Vec<ActorRef<ProcessorMessage>>,
     );
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (manager_cluster, primary_manager, processor_ref): Self::Arguments,
+        (manager_cluster, primary_manager, processor_pool): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Worker Actor starting up...");
 
@@ -144,7 +150,7 @@ impl Actor for WorkerActor {
             http_client: client,
             manager_cluster,
             primary_manager,
-            processor: processor_ref,
+            processor_pool,
         })
     }
 

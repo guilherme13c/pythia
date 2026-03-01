@@ -1,6 +1,9 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use tracing::{debug, error, info};
+use url::Url;
 
 use super::messages::ProcessorMessage;
 use super::state::ProcessorState;
@@ -10,6 +13,16 @@ const CHUNK_SIZE: usize = 200;
 const CHUNK_OVERLAP: usize = 50;
 
 pub struct ProcessorActor;
+
+pub fn get_target_shard(url_str: &str, num_shards: usize) -> usize {
+    let domain = Url::parse(url_str)
+        .map(|u| u.host_str().unwrap_or("unknown").to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let mut hasher = DefaultHasher::new();
+    domain.hash(&mut hasher);
+    (hasher.finish() as usize) % num_shards
+}
 
 impl ProcessorActor {
     fn clean_text(raw_text: &str) -> String {
@@ -52,7 +65,9 @@ impl ProcessorActor {
                     url
                 );
 
-                let _ = state.indexer.cast(IndexerMessage::StoreChunks {
+                let shard_idx = get_target_shard(&url, state.indexer_cluster.len());
+
+                let _ = state.indexer_cluster[shard_idx].cast(IndexerMessage::StoreChunks {
                     url,
                     chunks,
                     vectors: embeddings,
@@ -68,12 +83,12 @@ impl ProcessorActor {
 impl Actor for ProcessorActor {
     type Msg = ProcessorMessage;
     type State = ProcessorState;
-    type Arguments = ActorRef<IndexerMessage>;
+    type Arguments = Vec<ActorRef<IndexerMessage>>;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        indexer_ref: Self::Arguments,
+        indexer_cluster: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Processor Actor starting. Loading AI Embedding Model...");
 
@@ -86,7 +101,7 @@ impl Actor for ProcessorActor {
 
         Ok(ProcessorState {
             embedding_model: model,
-            indexer: indexer_ref,
+            indexer_cluster,
         })
     }
 
@@ -147,5 +162,21 @@ mod tests {
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0], "short sentence");
+    }
+
+    #[test]
+    fn test_shard_routing_determinism() {
+        let num_shards = 5;
+
+        let shard_a = get_target_shard("https://en.wikipedia.org/wiki/Rust", num_shards);
+        let shard_b = get_target_shard("https://en.wikipedia.org/wiki/C++", num_shards);
+
+        assert_eq!(
+            shard_a, shard_b,
+            "Pages from the same domain must route to the same shard"
+        );
+
+        let invalid_url_shard = get_target_shard("not_a_valid_url", num_shards);
+        assert!(invalid_url_shard < num_shards);
     }
 }

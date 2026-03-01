@@ -6,10 +6,10 @@ use crate::actors::query::messages::QueryMessage;
 pub mod handlers;
 pub mod models;
 
-pub fn build_router(query_ref: ActorRef<QueryMessage>) -> Router {
+pub fn build_router(query_pool: Vec<ActorRef<QueryMessage>>) -> Router {
     Router::new()
         .route("/search", get(handlers::search_handler))
-        .with_state(query_ref)
+        .with_state(query_pool)
 }
 
 #[cfg(test)]
@@ -67,7 +67,7 @@ mod tests {
     async fn test_search_endpoint() {
         let (mock_ref, _) = Actor::spawn(None, MockQueryActor, ()).await.unwrap();
 
-        let app = build_router(mock_ref);
+        let app = build_router(vec![mock_ref]);
 
         let request = Request::builder()
             .uri("/search?q=Rust&limit=5")
