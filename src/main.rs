@@ -32,7 +32,7 @@ async fn main() {
     info!("Starting Pythia Search Engine...");
 
     let mut indexer_cluster = Vec::new();
-    for i in 0..app_config.num_shards {
+    for i in 0..app_config.indexer_shards {
         let name = format!("indexer-{}", i);
         let (indexer_ref, _) = Actor::spawn(Some(name), IndexerActor, i)
             .await
@@ -51,7 +51,7 @@ async fn main() {
 
     let mut manager_cluster = Vec::new();
 
-    for i in 0..app_config.num_shards {
+    for i in 0..app_config.crawler_shards {
         let name = format!("manager-{}", i);
         let (manager_ref, _) = Actor::spawn(Some(name), ManagerActor, ())
             .await
@@ -60,7 +60,7 @@ async fn main() {
     }
 
     for (shard_idx, primary_manager) in manager_cluster.iter().enumerate() {
-        for w in 1..=app_config.workers_per_shard {
+        for w in 1..=app_config.workers_per_crawler_shard {
             let worker_name = format!("worker-{}-{}", shard_idx, w);
             Actor::spawn(
                 Some(worker_name),
@@ -83,7 +83,7 @@ async fn main() {
         let domain = Url::parse(&seed).unwrap().host_str().unwrap().to_string();
         let mut hasher = DefaultHasher::new();
         domain.hash(&mut hasher);
-        let shard_idx = (hasher.finish() as usize) % app_config.num_shards;
+        let shard_idx = (hasher.finish() as usize) % app_config.crawler_shards;
 
         let _ = manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(vec![seed]));
     }
@@ -91,7 +91,7 @@ async fn main() {
     let mut query_pool = Vec::new();
     for i in 0..app_config.query_pool_size {
         let name = format!("query-{}", i);
-        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, app_config.num_shards)
+        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, app_config.indexer_shards)
             .await
             .expect("Failed to start Searcher");
         query_pool.push(query_ref);
