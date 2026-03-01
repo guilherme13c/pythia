@@ -13,8 +13,17 @@ pub struct ManagerActor;
 impl ManagerActor {
     fn handle_add_urls(&self, state: &mut ManagerState, urls: Vec<String>) {
         for url in urls {
-            if state.seen_urls.insert(url.clone()) {
-                state.frontier.push_back(url);
+            if !state.seen_urls.check(&url) {
+                state.seen_urls.set(&url);
+
+                state.frontier.push_back(url.clone());
+
+                if let Err(e) = state.db.execute(
+                    "INSERT INTO urls (url, status) VALUES (?1, 'pending') ON CONFLICT(url) DO NOTHING",
+                    [&url],
+                ) {
+                    warn!("Failed to persist URL to DB: {}", e);
+                }
             }
         }
     }
@@ -130,10 +139,16 @@ impl ManagerActor {
         );
     }
 
-    fn handle_crawl_success(&self, state: &mut ManagerState, domain: String) {
+    fn handle_crawl_success(&self, state: &mut ManagerState, domain: String, url: String) {
         if let Some(metadata) = state.domain_metadata.get_mut(&domain) {
             metadata.consecutive_errors = 0;
             metadata.backoff_until = None;
+        }
+        if let Err(e) = state
+            .db
+            .execute("UPDATE urls SET status = 'done' WHERE url = ?1", [&url])
+        {
+            warn!("Failed to update URL status in DB: {}", e);
         }
     }
 }
@@ -171,8 +186,8 @@ impl Actor for ManagerActor {
             ManagerMessage::DomainRateLimited { domain, url } => {
                 self.handle_rate_limited(state, domain, url);
             }
-            ManagerMessage::CrawlSuccess { domain } => {
-                self.handle_crawl_success(state, domain);
+            ManagerMessage::CrawlSuccess { domain, url } => {
+                self.handle_crawl_success(state, domain, url);
             }
         }
         Ok(())
@@ -186,7 +201,7 @@ mod tests {
     #[test]
     fn test_handle_add_urls_deduplication() {
         let manager = ManagerActor;
-        let mut state = ManagerState::new();
+        let mut state = ManagerState::in_memory();
 
         let new_urls = vec![
             "https://example.com/page1".to_string(),
@@ -197,13 +212,22 @@ mod tests {
         manager.handle_add_urls(&mut state, new_urls);
 
         assert_eq!(state.frontier.len(), 2);
-        assert_eq!(state.seen_urls.len(), 2);
+        assert!(
+            state
+                .seen_urls
+                .check(&"https://example.com/page1".to_string())
+        );
+        assert!(
+            state
+                .seen_urls
+                .check(&"https://example.com/page2".to_string())
+        );
     }
 
     #[test]
     fn test_handle_rate_limited_exponential_backoff() {
         let manager = ManagerActor;
-        let mut state = ManagerState::new();
+        let mut state = ManagerState::in_memory();
         let domain = "wikipedia.org".to_string();
         let url = "https://wikipedia.org/page1".to_string();
 
@@ -226,7 +250,7 @@ mod tests {
     #[test]
     fn test_handle_crawl_success_clears_penalty() {
         let manager = ManagerActor;
-        let mut state = ManagerState::new();
+        let mut state = ManagerState::in_memory();
         let domain = "wikipedia.org".to_string();
         let url = "https://wikipedia.org/page1".to_string();
 
@@ -248,7 +272,7 @@ mod tests {
                 .is_some()
         );
 
-        manager.handle_crawl_success(&mut state, domain.clone());
+        manager.handle_crawl_success(&mut state, domain.clone(), url.clone());
 
         let metadata = state.domain_metadata.get(&domain).unwrap();
         assert_eq!(metadata.consecutive_errors, 0);

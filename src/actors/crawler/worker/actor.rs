@@ -23,27 +23,27 @@ impl WorkerActor {
         &self,
         state: &mut WorkerState,
         myself: ActorRef<WorkerMessage>,
-        url_str: String,
+        url: String,
     ) {
-        debug!("Worker fetching HTML: {}", url_str);
+        debug!("Worker fetching HTML: {}", url);
 
-        let domain = match Url::parse(&url_str) {
+        let domain = match Url::parse(&url) {
             Ok(u) => u.host_str().unwrap_or("unknown").to_string(),
             Err(_) => "unknown".to_string(),
         };
 
-        match state.http_client.get(&url_str).send().await {
+        match state.http_client.get(&url).send().await {
             Ok(response) if response.status().is_success() => {
                 let _ = state.primary_manager.cast(ManagerMessage::CrawlSuccess {
                     domain: domain.clone(),
+                    url: url.clone(),
                 });
 
                 if let Ok(html) = response.text().await {
                     let num_shards = state.manager_cluster.len();
-                    let (routed_links, raw_text) =
-                        extract_links_and_text(&html, &url_str, num_shards);
+                    let (routed_links, raw_text) = extract_links_and_text(&html, &url, num_shards);
 
-                    debug!("Extracted links and text from {}", url_str);
+                    debug!("Extracted links and text from {}", url);
 
                     for (shard_idx, urls) in routed_links {
                         let _ =
@@ -56,7 +56,7 @@ impl WorkerActor {
                     };
 
                     let _ = processor_ref.cast(ProcessorMessage::ProcessDocument {
-                        url: url_str.clone(),
+                        url: url.clone(),
                         raw_text,
                     });
                 }
@@ -66,15 +66,11 @@ impl WorkerActor {
                     .primary_manager
                     .cast(ManagerMessage::DomainRateLimited {
                         domain,
-                        url: url_str.clone(),
+                        url: url.clone(),
                     });
             }
-            Ok(response) => warn!(
-                "Failed to fetch {} - Status: {}",
-                url_str,
-                response.status()
-            ),
-            Err(e) => warn!("Network error fetching {}: {}", url_str, e),
+            Ok(response) => warn!("Failed to fetch {} - Status: {}", url, response.status()),
+            Err(e) => warn!("Network error fetching {}: {}", url, e),
         }
 
         let _ = state
