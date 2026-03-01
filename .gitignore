@@ -2,3 +2,8 @@
 /.fastembed_cache
 /data
 
+local.env
+
+flamegraph.svg
+perf.data
+
