@@ -1,109 +1,83 @@
 # Pythia
 
-Lightweight Rust actor-based indexing and crawling pipeline
+<!--toc:start-->
 
-## Project Summary
+- [Pythia](#pythia)
+  - [Tech Stack](#tech-stack)
+  - [How it works](#how-it-works)
+  - [Getting Started](#getting-started)
+    - [1. Clone and setup](#1-clone-and-setup)
+    - [2. Run it](#2-run-it)
+    - [3. Search](#3-search)
+  - [Contributing](#contributing)
+  <!--toc:end-->
 
-`Pythia` is a modular, actor-oriented Rust project implementing a distributed crawling, processing, indexing, and query pipeline. It separates responsibilities across actor groups (`crawler`, `processor`, `indexer`, and `query`) so components can scale independently and be tested in isolation.
+A concurrent, local search engine and web crawler written in Rust.
 
-## Features
+I'm building Pythia to experiment with the Actor model in Rust. It
+crawls the web, extracts text, computes vector embeddings locally,
+and serves semantic search results via a REST API.
 
-- Modular actor layout: `crawler`, `processor`, `indexer`, `query`
-- Distributed-friendly design for parallel workers
-- Pluggable processing pipeline for document transformation
-- Efficient indexing and query flow
+## Tech Stack
 
-## Architecture Overview
+- **Concurrency:** [`ractor`](https://github.com/slawlor/ractor) for
+  Erlang-style actors.
+- **Vector DB:** [`lancedb`](https://github.com/lancedb/lancedb) for fast, on-disk
+  nearest-neighbor search.
+- **Embeddings:** [`fastembed`](https://github.com/Anush008/fastembed-rs) to run
+  ML models locally (no API keys needed).
+- **HTTP:** [`axum`](https://github.com/tokio-rs/axum) for the search endpoint.
 
-The codebase is organized under `src/actors` with four main groups:
+## How it works
 
-- `crawler` — fetches content and pushes jobs to the pipeline
-- `processor` — transforms and extracts features from raw content
-- `indexer` — stores and updates indexed representations
-- `query` — serves lookup/query requests against the index
+The architecture relies on message passing between a few specific actors:
 
-Actors communicate via in-process message types defined in the `messages` modules; see the respective actor subfolders for message schemas and state definitions.
+- **Managers & Workers:** Handle the crawling queue, respect `robots.txt`,
+  and scrape HTML.
+- **Processor:** Cleans and chunks massive text blobs.
+- **Indexer:** Computes the embeddings and saves them to LanceDB.
+- **Query:** Takes HTTP requests, embeds the query string, and fetches results.
 
-## Repository Layout
+## Getting Started
 
-- `src/main.rs` — application entrypoint and actor wiring
-- `src/actors/` — actor groups and submodules
-	- `crawler/` — crawling manager and worker implementations
-	- `processor/` — processing actor and message definitions
-	- `indexer/` — indexing actor and state
-	- `query/` — query actor and API
+You'll need a recent Rust toolchain and the protobuf compiler
+(`sudo apt install protobuf-compiler` or `brew install protobuf` for LanceDB).
 
-## Quickstart
-
-Build and run locally:
+### 1. Clone and setup
 
 ```bash
-# Build (release for better performance)
-cargo build --release
+git clone [https://github.com/guilherme13c/pythia.git](https://github.com/guilherme13c/pythia.git)
+cd pythia
+```
 
-# Run the service
+Create a `seeds.txt` file in the root directory to give the crawler a starting point:
+
+```plaintext
+[https://en.wikipedia.org/](https://en.wikipedia.org/)
+[https://rust-lang.org/](https://rust-lang.org/)
+```
+
+You can optionally create a .env file to tweak settings (see `src/config.rs`
+for defaults).
+
+### 2. Run it
+
+```bash
 cargo run --release
-
-# Run tests
-cargo test
 ```
 
-Enable verbose logging for local debugging:
+The crawler will start running immediately, and the Axum server will bind to `127.0.0.1:3000`.
+
+### 3. Search
 
 ```bash
-export RUST_LOG=info
-cargo run
+curl "[http://127.0.0.1:3000/search?q=What+is+Rust&limit=5](http://127.0.0.1:3000/search?q=What+is+Rust&limit=5)"
 ```
 
-## Configuration
-
-Configuration is primarily controlled via environment variables and command-line flags (where present). Common settings:
-
-- `RUST_LOG` — logging verbosity
-- Any actor-specific configuration is defined near the actor's `state.rs` or `mod.rs` files (see `src/actors/*`)
-
-Add a short config loader or `.env` usage if you plan to support richer runtime configuration.
-
-## Development
-
-- Code is idiomatic Rust — use `cargo fmt` and `cargo clippy` before submitting a PR.
-- Tests live next to the modules they exercise; run `cargo test` to execute the suite.
-- To add a new actor, add a submodule under `src/actors` and register it in `main.rs`.
-
-Suggested developer commands:
-
-```bash
-cargo fmt
-cargo clippy --all-targets --all-features
-cargo test
-```
-
-## Examples / Usage
-
-Look at the actor folders for example message flows. To prototype a new pipeline step, implement a `processor` actor that accepts the existing message type and emits the transformed message consumed by `indexer`.
-
-## Deployment
-
-- Build with `--release`.
-- Consider containerizing the binary and running multiple replicas of the `crawler` and `processor` actors behind a supervisor or orchestration layer.
-- Use structured logging and a metrics exporter for observability.
+---
 
 ## Contributing
 
-- Fork the repo and open a pull request with a clear description and tests.
-- Follow Rust formatting and linting conventions; keep changes focused and well-documented.
-
-## Roadmap & TODOs
-
-- Add integration tests for end-to-end crawling → indexing → query flows
-- Provide a lightweight CLI for administrative tasks (index rebuild, snapshot)
-- Add graceful shutdown and state checkpointing for actors
-
-## License
-
-This project is licensed under the terms in the `LICENSE` file.
-
-## Maintainers
-
-Maintained by the contributors listed in the repository. For issues or questions open an issue on the tracker.
-
+We're actively looking for contributors! There is a bunch of open issues (some
+very beginner-friendly) on the tracker. See `CONTRIBUTING.md` for details on
+how to jump in.
