@@ -35,13 +35,14 @@ async fn main() {
         .await
         .expect("Failed to start Indexer");
 
-    let (processor_ref, _) = Actor::spawn(
-        Some("processor".to_string()),
-        ProcessorActor,
-        indexer_ref.clone(),
-    )
-    .await
-    .expect("Failed to start Processor");
+    let mut processor_pool = Vec::new();
+    for i in 0..app_config.processor_pool_size {
+        let name = format!("processor-{}", i);
+        let (processor_ref, _) = Actor::spawn(Some(name), ProcessorActor, indexer_ref.clone())
+            .await
+            .expect("Failed to start Processor");
+        processor_pool.push(processor_ref);
+    }
 
     let mut manager_cluster = Vec::new();
 
@@ -62,7 +63,7 @@ async fn main() {
                 (
                     manager_cluster.clone(),
                     primary_manager.clone(),
-                    processor_ref.clone(),
+                    processor_pool.clone(),
                 ),
             )
             .await
@@ -82,14 +83,19 @@ async fn main() {
         let _ = manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(vec![seed]));
     }
 
-    let (query_ref, _) = Actor::spawn(Some("query".to_string()), QueryActor, ())
-        .await
-        .expect("Failed to start Searcher");
+    let mut query_pool = Vec::new();
+    for i in 0..app_config.query_pool_size {
+        let name = format!("query-{}", i);
+        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, ())
+            .await
+            .expect("Failed to start Searcher");
+        query_pool.push(query_ref);
+    }
 
     let bind_addr = format!("{}:{}", app_config.host, app_config.port);
     info!("Starting REST API on http://{}", bind_addr);
 
-    let app = api::build_router(query_ref.clone());
+    let app = api::build_router(query_pool.clone());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
 
     tokio::spawn(async move {
@@ -105,10 +111,13 @@ async fn main() {
 
     info!("Shutdown signal received! Stopping actors gracefully...");
 
-    processor_ref.stop(Some("Ctrl+C Shutdown".to_string()));
     indexer_ref.stop(Some("Ctrl+C Shutdown".to_string()));
-    query_ref.stop(Some("Ctrl+C Shutdown".to_string()));
-
+    for processor_ref in processor_pool {
+        processor_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    }
+    for query_ref in query_pool {
+        query_ref.stop(Some("Ctrl+C Shutdown".to_string()));
+    }
     for manager in manager_cluster {
         manager.stop(Some("Ctrl+C Shutdown".to_string()));
     }

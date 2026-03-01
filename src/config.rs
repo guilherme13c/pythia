@@ -8,6 +8,8 @@ pub struct Config {
     pub num_shards: usize,
     pub workers_per_shard: usize,
     pub seeds_file: String,
+    pub processor_pool_size: usize,
+    pub query_pool_size: usize,
 }
 
 impl Config {
@@ -30,6 +32,14 @@ impl Config {
                 .parse()
                 .expect("WORKERS_PER_SHARD must be a valid number"),
             seeds_file: env::var("SEEDS_FILE").unwrap_or_else(|_| "seeds.txt".to_string()),
+            processor_pool_size: std::env::var("PROCESSOR_POOL_SIZE")
+                .unwrap_or_else(|_| "4".to_string())
+                .parse()
+                .expect("PROCESSOR_POOL_SIZE must be a number"),
+            query_pool_size: std::env::var("QUERY_POOL_SIZE")
+                .unwrap_or_else(|_| "4".to_string())
+                .parse()
+                .expect("QUERY_POOL_SIZE must be a number"),
         }
     }
 
@@ -68,6 +78,8 @@ mod tests {
             num_shards: 1,
             workers_per_shard: 1,
             seeds_file: temp_file.path().to_str().unwrap().to_string(),
+            processor_pool_size: 4,
+            query_pool_size: 4,
         };
 
         let seeds = config.load_seeds();
