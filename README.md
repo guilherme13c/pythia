@@ -46,15 +46,15 @@ You'll need a recent Rust toolchain and the protobuf compiler
 ### 1. Clone and setup
 
 ```bash
-git clone [https://github.com/guilherme13c/pythia.git](https://github.com/guilherme13c/pythia.git)
+git clone https://github.com/guilherme13c/pythia.git
 cd pythia
 ```
 
 Create a `seeds.txt` file in the root directory to give the crawler a starting point:
 
 ```plaintext
-[https://en.wikipedia.org/](https://en.wikipedia.org/)
-[https://rust-lang.org/](https://rust-lang.org/)
+https://en.wikipedia.org/
+https://rust-lang.org/
 ```
 
 You can optionally create a .env file to tweak settings (see `src/config.rs`
@@ -71,7 +71,7 @@ The crawler will start running immediately, and the Axum server will bind to `12
 ### 3. Search
 
 ```bash
-curl "[http://127.0.0.1:3000/search?q=What+is+Rust&limit=5](http://127.0.0.1:3000/search?q=What+is+Rust&limit=5)"
+curl "http://127.0.0.1:3000/search?q=What+is+Rust&limit=5"
 ```
 
 ---
