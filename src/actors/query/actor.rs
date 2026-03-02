@@ -6,7 +6,7 @@ use lancedb::query::{ExecutableQuery, QueryBase};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use tracing::{error, info};
 
-use super::messages::{QueryMessage, SearchResult};
+use super::messages::{ParsedQuery, QueryMessage, SearchResult};
 use super::state::QueryState;
 
 pub struct QueryActor;
@@ -82,23 +82,29 @@ impl QueryActor {
 
     async fn execute_query(
         state: &mut QueryState,
-        text: &str,
+        parsed_query: &ParsedQuery,
         limit: usize,
     ) -> Result<Vec<SearchResult>, String> {
         let embeddings = state
             .embedding_model
-            .embed(vec![text.to_string()], None)
+            .embed(vec![parsed_query.semantic_text.clone()], None)
             .map_err(|e| format!("Failed to embed query: {}", e))?;
 
         let query_vector = &embeddings[0];
 
         let mut futures = Vec::new();
         for table in &state.tables {
-            let query_builder = table
+            let mut query_builder = table
                 .query()
                 .nearest_to(query_vector.clone())
-                .map_err(|e| format!("Failed to build query: {}", e))?
-                .limit(limit);
+                .map_err(|e| format!("Failed to build query: {}", e))?;
+
+            if let Some(domain) = &parsed_query.site_filter {
+                let filter_str = format!("url LIKE '%{}%'", domain);
+                query_builder = query_builder.only_if(filter_str);
+            }
+
+            let query_builder = query_builder.limit(limit);
 
             futures.push(async move {
                 let mut stream = query_builder.execute().await.map_err(|e| e.to_string())?;
@@ -161,8 +167,12 @@ impl Actor for QueryActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            QueryMessage::Query { text, limit, reply } => {
-                let results = match Self::execute_query(state, &text, limit).await {
+            QueryMessage::Query {
+                parsed_query,
+                limit,
+                reply,
+            } => {
+                let results = match Self::execute_query(state, &parsed_query, limit).await {
                     Ok(res) => res,
                     Err(e) => {
                         error!("{}", e);

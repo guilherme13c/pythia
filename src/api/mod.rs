@@ -48,13 +48,13 @@ mod tests {
         ) -> Result<(), ActorProcessingErr> {
             match message {
                 QueryMessage::Query {
-                    text,
+                    parsed_query,
                     limit: _,
                     reply,
                 } => {
                     let _ = reply.send(vec![SearchResult {
                         url: "https://test.com".to_string(),
-                        text: format!("Found: {}", text),
+                        text: format!("Found: {}", parsed_query.semantic_text),
                         distance: 0.99,
                     }]);
                 }

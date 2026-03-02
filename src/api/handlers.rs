@@ -6,13 +6,15 @@ use ractor::ActorRef;
 use rand::seq::IndexedRandom;
 
 use super::models::SearchParams;
-use crate::actors::query::messages::{QueryMessage, SearchResult};
+use crate::actors::query::messages::{ParsedQuery, QueryMessage, SearchResult};
 
 pub async fn search_handler(
     State(query_pool): State<Vec<ActorRef<QueryMessage>>>,
     Query(params): Query<SearchParams>,
 ) -> Json<Vec<SearchResult>> {
     let limit = params.limit.unwrap_or(10);
+
+    let parsed_query = ParsedQuery::parse(&params.q);
 
     let query_ref = {
         let mut rng = rand::rng();
@@ -23,7 +25,7 @@ pub async fn search_handler(
     };
 
     let results = ractor::call!(query_ref, |reply| QueryMessage::Query {
-        text: params.q,
+        parsed_query,
         limit,
         reply,
     })
