@@ -87,6 +87,7 @@ impl QueryActor {
                 url: url_array.value(i).to_string(),
                 text: text_array.value(i).to_string(),
                 distance: dist_array.value(i),
+                snippet: String::new(),
             });
         }
 
@@ -131,6 +132,7 @@ impl QueryActor {
                 url,
                 text,
                 distance: combined_score,
+                snippet: String::new(),
             })
             .collect();
 
@@ -178,6 +180,64 @@ impl QueryActor {
 
         candidates.truncate(limit);
         candidates
+    }
+
+    fn generate_snippet(text: &str, query: &str) -> String {
+        let terms: Vec<String> = query
+            .to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+
+        if terms.is_empty() {
+            let excerpt: String = text.chars().take(200).collect();
+            return format!("{}...", excerpt);
+        }
+
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let window_size = 40;
+
+        let mut best_score = 0;
+        let mut best_start = 0;
+
+        let limit = words.len().saturating_sub(window_size);
+        for i in 0..=limit {
+            let end = std::cmp::min(i + window_size, words.len());
+            let window = &words[i..end];
+            let mut score = 0;
+            for word in window {
+                let lower = word.to_lowercase();
+                if terms.iter().any(|t| lower.contains(t)) {
+                    score += 1;
+                }
+            }
+            if score > best_score {
+                best_score = score;
+                best_start = i;
+            }
+        }
+
+        let best_window = &words[best_start..std::cmp::min(best_start + window_size, words.len())];
+        let mut highlighted = Vec::new();
+
+        for w in best_window {
+            let lower = w.to_lowercase();
+            if terms.iter().any(|t| lower.contains(t)) {
+                highlighted.push(format!("<b>{}</b>", w));
+            } else {
+                highlighted.push(w.to_string());
+            }
+        }
+
+        let mut result = highlighted.join(" ");
+        if best_start > 0 {
+            result = format!("...{} ", result);
+        }
+        if best_start + window_size < words.len() {
+            result = format!("{}...", result);
+        }
+
+        result
     }
 
     async fn execute_query(
@@ -255,12 +315,18 @@ impl QueryActor {
             candidate_limit,
         );
 
-        Ok(Self::rerank_candidates(
+        let mut final_results = Self::rerank_candidates(
             &mut state.reranker_model,
             parsed_query.original_text.as_str(),
             candidates,
             limit,
-        ))
+        );
+
+        for result in &mut final_results {
+            result.snippet = Self::generate_snippet(&result.text, &parsed_query.original_text);
+        }
+
+        Ok(final_results)
     }
 }
 
@@ -378,11 +444,13 @@ mod tests {
                 url: "https://doc-a.com".to_string(),
                 text: "Text A".to_string(),
                 distance: 0.1,
+                snippet: String::new(),
             },
             SearchResult {
                 url: "https://doc-b.com".to_string(),
                 text: "Text B".to_string(),
                 distance: 0.3,
+                snippet: String::new(),
             },
         ];
 
@@ -391,11 +459,13 @@ mod tests {
                 url: "https://doc-b.com".to_string(),
                 text: "Text B".to_string(),
                 distance: 15.0,
+                snippet: String::new(),
             },
             SearchResult {
                 url: "https://doc-c.com".to_string(),
                 text: "Text C".to_string(),
                 distance: 5.0,
+                snippet: String::new(),
             },
         ];
 
@@ -424,6 +494,7 @@ mod tests {
             text: "I have so much rust on my old car. The rust is eating through the metal."
                 .to_string(),
             distance: 10.0,
+            snippet: String::new(),
         };
 
         let doc_b = SearchResult {
@@ -431,6 +502,7 @@ mod tests {
             text: "Rust is a blazingly fast and memory-safe systems programming language."
                 .to_string(),
             distance: 5.0,
+            snippet: String::new(),
         };
 
         let candidates = vec![doc_a, doc_b];
@@ -443,5 +515,21 @@ mod tests {
         assert_eq!(reranked[1].url, "https://auto-repair.com");
 
         assert!(reranked[0].distance > reranked[1].distance);
+    }
+
+    #[test]
+    fn test_generate_snippet() {
+        let text = "This is a very long document. It has many words. We are adding extra filler text here just to make sure that the document exceeds the forty word limit imposed by our sliding window algorithm. Otherwise the whole thing gets captured. We want to find the specific part about rust programming. Rust is fast and safe. The rest of the document is boring and shouldn't be in the snippet.";
+        let query = "rust programming";
+
+        let snippet = QueryActor::generate_snippet(text, query);
+
+        assert!(snippet.contains("<b>rust</b>"));
+        assert!(snippet.contains("<b>Rust</b>"));
+        assert!(snippet.contains("<b>programming.</b>"));
+
+        assert!(!snippet.contains("very long document"));
+        assert!(snippet.starts_with("..."));
+        assert!(snippet.contains("We want to find"));
     }
 }

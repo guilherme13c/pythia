@@ -10,6 +10,7 @@ pub struct SearchResult {
     pub url: String,
     pub text: String,
     pub distance: f32,
+    pub snippet: String,
 }
 
 #[derive(Debug, Clone)]
