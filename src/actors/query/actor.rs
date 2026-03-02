@@ -1,6 +1,6 @@
 use arrow::array::{Float32Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding, TextRerank};
 use futures::StreamExt;
 use lance_index::scalar::FullTextSearchQuery;
 use lancedb::query::{ExecutableQuery, QueryBase};
@@ -45,6 +45,10 @@ impl QueryActor {
     fn initialize_model() -> TextEmbedding {
         TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
             .expect("Failed to initialize Embedding Model in Searcher")
+    }
+
+    fn initialize_reranker() -> TextRerank {
+        TextRerank::try_new(Default::default()).expect("Failed to initialize Cross-Encoder Model")
     }
 
     fn parse_record_batch(batch: &RecordBatch, is_vector: bool) -> Vec<SearchResult> {
@@ -140,11 +144,49 @@ impl QueryActor {
         final_results
     }
 
+    fn rerank_candidates(
+        reranker: &mut TextRerank,
+        query_text: &str,
+        mut candidates: Vec<SearchResult>,
+        limit: usize,
+    ) -> Vec<SearchResult> {
+        if candidates.is_empty() {
+            return candidates;
+        }
+
+        let document_texts: Vec<&str> = candidates.iter().map(|c| c.text.as_str()).collect();
+
+        match reranker.rerank(query_text, document_texts, false, None) {
+            Ok(results) => {
+                for result in results {
+                    candidates[result.index].distance = result.score;
+                }
+
+                candidates.sort_by(|a, b| {
+                    b.distance
+                        .partial_cmp(&a.distance)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            Err(e) => {
+                error!(
+                    "Cross-encoder reranking failed: {}. Falling back to RRF scores.",
+                    e
+                );
+            }
+        }
+
+        candidates.truncate(limit);
+        candidates
+    }
+
     async fn execute_query(
         state: &mut QueryState,
         parsed_query: &ParsedQuery,
         limit: usize,
     ) -> Result<Vec<SearchResult>, String> {
+        let candidate_limit = std::cmp::max(limit * 5, 250);
+
         let embeddings = state
             .embedding_model
             .embed(vec![parsed_query.original_text.clone()], None)
@@ -163,7 +205,7 @@ impl QueryActor {
                 let filter_str = format!("url LIKE '%{}%'", domain);
                 vec_query = vec_query.only_if(filter_str);
             }
-            let vec_query = vec_query.limit(limit);
+            let vec_query = vec_query.limit(candidate_limit);
 
             let mut fts_query = table.query().full_text_search(FullTextSearchQuery::new(
                 parsed_query.processed_text.clone(),
@@ -173,7 +215,7 @@ impl QueryActor {
                 let filter_str = format!("url LIKE '%{}%'", domain);
                 fts_query = fts_query.only_if(filter_str);
             }
-            let fts_query = fts_query.limit(limit);
+            let fts_query = fts_query.limit(candidate_limit);
 
             futures.push(async move {
                 let mut shard_vec_results = Vec::new();
@@ -207,7 +249,18 @@ impl QueryActor {
             all_fts_results.extend(res.1);
         }
 
-        Ok(Self::compute_rrf(all_vec_results, all_fts_results, limit))
+        let candidates = Self::compute_rrf(
+            all_vec_results.clone(),
+            all_fts_results.clone(),
+            candidate_limit,
+        );
+
+        Ok(Self::rerank_candidates(
+            &mut state.reranker_model,
+            parsed_query.original_text.as_str(),
+            candidates,
+            limit,
+        ))
     }
 }
 
@@ -223,11 +276,13 @@ impl Actor for QueryActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Starting Searcher Actor...");
 
-        let model = Self::initialize_model();
+        let embedding_model = Self::initialize_model();
+        let reranker_model = Self::initialize_reranker();
         let tables = Self::initialize_databases(num_shards).await;
 
         Ok(QueryState {
-            embedding_model: model,
+            embedding_model,
+            reranker_model,
             tables,
         })
     }
@@ -355,5 +410,38 @@ mod tests {
 
         assert!(fused[0].distance > fused[1].distance);
         assert!(fused[1].distance > fused[2].distance);
+    }
+
+    #[test]
+    fn test_rerank_candidates_reorders_by_semantic_relevance() {
+        let mut reranker = fastembed::TextRerank::try_new(Default::default())
+            .expect("Failed to init test reranker");
+
+        let query = "what is the rust programming language?";
+
+        let doc_a = SearchResult {
+            url: "https://auto-repair.com".to_string(),
+            text: "I have so much rust on my old car. The rust is eating through the metal."
+                .to_string(),
+            distance: 10.0,
+        };
+
+        let doc_b = SearchResult {
+            url: "https://rust-lang.org".to_string(),
+            text: "Rust is a blazingly fast and memory-safe systems programming language."
+                .to_string(),
+            distance: 5.0,
+        };
+
+        let candidates = vec![doc_a, doc_b];
+
+        let reranked = QueryActor::rerank_candidates(&mut reranker, query, candidates, 2);
+
+        assert_eq!(reranked.len(), 2);
+
+        assert_eq!(reranked[0].url, "https://rust-lang.org");
+        assert_eq!(reranked[1].url, "https://auto-repair.com");
+
+        assert!(reranked[0].distance > reranked[1].distance);
     }
 }
