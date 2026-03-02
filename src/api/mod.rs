@@ -54,7 +54,7 @@ mod tests {
                 } => {
                     let _ = reply.send(vec![SearchResult {
                         url: "https://test.com".to_string(),
-                        text: format!("Found: {}", parsed_query.semantic_text),
+                        text: format!("Found: {}", parsed_query.original_text),
                         distance: 0.99,
                     }]);
                 }

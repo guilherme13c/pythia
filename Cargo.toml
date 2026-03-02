@@ -23,6 +23,8 @@ console-subscriber = "0.5.0"
 rand = "0.10.0"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 bloomfilter = "3.0.1"
+stop-words = "0.10.0"
+rust-stemmers = "1.2.0"
 
 [dev-dependencies]
 tempfile = "3.10.1"

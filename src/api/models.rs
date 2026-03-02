@@ -4,6 +4,7 @@ use serde::Deserialize;
 pub struct SearchParams {
     pub q: String,
     pub limit: Option<usize>,
+    pub lang: Option<String>,
 }
 
 #[cfg(test)]
@@ -12,11 +13,12 @@ mod tests {
 
     #[test]
     fn test_search_params_parsing() {
-        let query_string = "q=machine+learning&limit=50";
+        let query_string = "q=machine+learning&limit=50&lang=fr";
         let params: SearchParams = serde_urlencoded::from_str(query_string).unwrap();
 
         assert_eq!(params.q, "machine learning");
         assert_eq!(params.limit, Some(50));
+        assert_eq!(params.lang.as_deref(), Some("fr"));
 
         let query_string_no_limit = "q=rust+lang";
         let params_no_limit: SearchParams =

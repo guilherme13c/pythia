@@ -87,7 +87,7 @@ impl QueryActor {
     ) -> Result<Vec<SearchResult>, String> {
         let embeddings = state
             .embedding_model
-            .embed(vec![parsed_query.semantic_text.clone()], None)
+            .embed(vec![parsed_query.processed_text.clone()], None)
             .map_err(|e| format!("Failed to embed query: {}", e))?;
 
         let query_vector = &embeddings[0];
