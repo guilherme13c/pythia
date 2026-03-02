@@ -1,6 +1,8 @@
 use arrow::array::{FixedSizeListArray, StringArray};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::{RecordBatch, RecordBatchIterator};
+use lancedb::index::Index;
+use lancedb::index::scalar::FtsIndexBuilder;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::Arc;
 use tracing::{error, info};
@@ -40,10 +42,19 @@ impl IndexerActor {
             }
             Err(_) => {
                 info!("Creating new vector table for shard {}...", shard_idx);
-                db.create_empty_table(table_name, schema)
+                let table = db
+                    .create_empty_table(table_name, schema)
                     .execute()
                     .await
-                    .expect("Failed to create table")
+                    .expect("Failed to create table");
+
+                table
+                    .create_index(&["text"], Index::FTS(FtsIndexBuilder::default()))
+                    .execute()
+                    .await
+                    .expect("Failed to create FTS index");
+
+                table
             }
         }
     }
