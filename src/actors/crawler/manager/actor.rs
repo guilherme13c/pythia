@@ -156,15 +156,15 @@ impl ManagerActor {
 impl Actor for ManagerActor {
     type Msg = ManagerMessage;
     type State = ManagerState;
-    type Arguments = ();
+    type Arguments = usize;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        _args: Self::Arguments,
+        shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Crawler Manager Shard starting...");
-        Ok(ManagerState::new())
+        Ok(ManagerState::new(shard_idx))
     }
 
     async fn handle(

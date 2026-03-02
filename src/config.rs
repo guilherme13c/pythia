@@ -1,5 +1,29 @@
 use std::env;
 use std::fs;
+use std::str::FromStr;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunMode {
+    CRAWL,
+    SEARCH,
+    FULL,
+}
+
+impl FromStr for RunMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "crawl" => Ok(RunMode::CRAWL),
+            "search" => Ok(RunMode::SEARCH),
+            "full" => Ok(RunMode::FULL),
+            _ => Err(format!(
+                "Invalid run mode: '{}'. Expected 'crawl', 'search', or 'full'.",
+                s
+            )),
+        }
+    }
+}
 
 pub struct Config {
     pub host: String,
@@ -13,11 +37,15 @@ pub struct Config {
     pub query_pool_size: usize,
     pub bloom_filter_capacity: usize,
     pub bloom_filter_fp_rate: f64,
+    pub run_mode: RunMode,
 }
 
 impl Config {
     pub fn load() -> Self {
-        dotenvy::dotenv().ok();
+        #[cfg(not(test))]
+        if dotenvy::dotenv().is_err() {
+            dotenvy::from_filename("local.env").ok();
+        }
 
         Self {
             host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
@@ -65,6 +93,11 @@ impl Config {
                 .unwrap_or_else(|_| "0.001".to_string())
                 .parse()
                 .expect("BLOOM_FILTER_FP_RATE must be a float"),
+
+            run_mode: env::var("RUN_MODE")
+                .unwrap_or_else(|_| "full".to_string())
+                .parse()
+                .expect("RUN_MODE must be 'crawl', 'search', or 'full'"),
         }
     }
 
@@ -109,6 +142,7 @@ mod tests {
             query_pool_size: 4,
             bloom_filter_capacity: 100000,
             bloom_filter_fp_rate: 0.001,
+            run_mode: RunMode::CRAWL,
         };
 
         let seeds = config.load_seeds();
@@ -126,6 +160,7 @@ mod tests {
             env::remove_var("CRAWLER_SHARDS");
             env::remove_var("INDEXER_SHARDS");
             env::remove_var("PROCESSOR_POOL_SIZE");
+            env::remove_var("RUN_MODE");
         }
 
         let config = Config::load();
@@ -136,5 +171,51 @@ mod tests {
         assert_eq!(config.indexer_shards, 3);
         assert_eq!(config.processor_pool_size, 4);
         assert_eq!(config.query_pool_size, 4);
+        assert_eq!(config.run_mode, RunMode::FULL);
+    }
+
+    #[test]
+    fn test_run_mode_parsing() {
+        assert_eq!(RunMode::from_str("crawl").unwrap(), RunMode::CRAWL);
+        assert_eq!(RunMode::from_str("search").unwrap(), RunMode::SEARCH);
+        assert_eq!(RunMode::from_str("full").unwrap(), RunMode::FULL);
+
+        assert_eq!(RunMode::from_str("cRAWl").unwrap(), RunMode::CRAWL);
+        assert_eq!(RunMode::from_str("sEaRCH").unwrap(), RunMode::SEARCH);
+        assert_eq!(RunMode::from_str("fULl").unwrap(), RunMode::FULL);
+
+        let err = RunMode::from_str("invalid").unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid run mode: 'invalid'. Expected 'crawl', 'search', or 'full'."
+        );
+    }
+
+    #[test]
+    fn test_config_run_mode_env_crawler() {
+        unsafe {
+            env::set_var("RUN_MODE", "crawl");
+        }
+
+        let config = Config::load();
+        assert_eq!(config.run_mode, RunMode::CRAWL);
+
+        unsafe {
+            env::remove_var("RUN_MODE");
+        }
+    }
+
+    #[test]
+    fn test_config_run_mode_env_api() {
+        unsafe {
+            env::set_var("RUN_MODE", "search");
+        }
+
+        let config = Config::load();
+        assert_eq!(config.run_mode, RunMode::SEARCH);
+
+        unsafe {
+            env::remove_var("RUN_MODE");
+        }
     }
 }
