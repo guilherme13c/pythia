@@ -7,3 +7,7 @@ local.env
 flamegraph.svg
 perf.data
 
+*.db
+*.db-journal
+*.lance
+
