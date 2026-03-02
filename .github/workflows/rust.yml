@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: "sccache"
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   build:
@@ -19,13 +21,11 @@ jobs:
       - name: Install protobuf-compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Cache Cargo Registry
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: "false"
-
       - name: Run sccache
         uses: mozilla-actions/sccache-action@v0.0.6
+
+      - name: Cache Cargo Registry
+        uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --verbose
