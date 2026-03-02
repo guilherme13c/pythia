@@ -5372,6 +5372,7 @@ dependencies = [
  "fastembed",
  "futures",
  "http-body-util",
+ "lance-index",
  "lancedb",
  "ractor",
  "rand 0.10.0",

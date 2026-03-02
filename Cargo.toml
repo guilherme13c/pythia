@@ -13,6 +13,7 @@ reqwest = { version = "0.13.2", features = ["rustls"] }
 scraper = "0.25.0"
 fastembed = "5.11.0"
 lancedb = "0.26.2"
+lance-index = "2.0.0"
 arrow = "57.2"
 futures = "0.3.32"
 axum = "0.8.8"
