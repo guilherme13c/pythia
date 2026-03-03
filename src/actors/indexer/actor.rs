@@ -122,9 +122,12 @@ impl Actor for IndexerActor {
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let group_name = format!("indexer-shard-{}", shard_idx);
+        ractor::pg::join(group_name, vec![myself.clone().into()]);
+
         info!("Starting Vector DB Indexer...");
 
         let table = Self::initialize_database(shard_idx).await;
@@ -139,11 +142,7 @@ impl Actor for IndexerActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            IndexerMessage::StoreChunks {
-                url,
-                chunks,
-                vectors,
-            } => {
+            IndexerMessage::StoreChunks(url, chunks, vectors) => {
                 self.handle_store_chunks(state, url, chunks, vectors).await;
             }
         }

@@ -26,12 +26,16 @@ pub async fn search_handler(
             .clone()
     };
 
-    let results = ractor::call!(query_ref, |reply| QueryMessage::Query {
+    let results = ractor::call!(query_ref, |reply| QueryMessage::Query(
         parsed_query,
         limit,
         reply,
-    })
+    ))
     .unwrap_or_else(|_| vec![]);
 
     Json(results)
+}
+
+pub async fn health_handler() -> Json<bool> {
+    Json(true)
 }

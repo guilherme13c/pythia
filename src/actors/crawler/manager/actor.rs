@@ -11,20 +11,36 @@ use crate::actors::crawler::worker::messages::WorkerMessage;
 pub struct ManagerActor;
 
 impl ManagerActor {
-    fn handle_add_urls(&self, state: &mut ManagerState, urls: Vec<String>) {
+    pub fn handle_add_urls(&self, state: &mut ManagerState, urls: Vec<String>) {
+        let mut new_urls = Vec::new();
         for url in urls {
             if !state.seen_urls.check(&url) {
                 state.seen_urls.set(&url);
-
                 state.frontier.push_back(url.clone());
-
-                if let Err(e) = state.db.execute(
-                    "INSERT INTO urls (url, status) VALUES (?1, 'pending') ON CONFLICT(url) DO NOTHING",
-                    [&url],
-                ) {
-                    warn!("Failed to persist URL to DB: {}", e);
-                }
+                new_urls.push(url);
             }
+        }
+        if new_urls.is_empty() {
+            return;
+        }
+
+        let tx = match state.db.transaction() {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("Failed to start transaction: {}", e);
+                return;
+            }
+        };
+
+        {
+            let mut stmt = tx.prepare("INSERT INTO urls (url, status) VALUES (?1, 'pending') ON CONFLICT(url) DO NOTHING").unwrap();
+            for url in new_urls {
+                let _ = stmt.execute([&url]);
+            }
+        }
+
+        if let Err(e) = tx.commit() {
+            warn!("Failed to commit batch URL inserts: {}", e);
         }
     }
 
@@ -37,7 +53,7 @@ impl ManagerActor {
         state.domain_metadata.insert(domain, metadata);
     }
 
-    fn handle_request_work(&self, state: &mut ManagerState, worker_ref: ActorRef<WorkerMessage>) {
+    pub fn handle_request_work(&self, state: &mut ManagerState, worker_name: String) {
         let mut next_job = None;
         let mut skipped_urls = Vec::new();
         let queue_len = state.frontier.len();
@@ -70,10 +86,7 @@ impl ManagerActor {
                     skipped_urls.push(url_str);
                     metadata.rules_fetched = true;
 
-                    next_job = Some(WorkerMessage::FetchRobotsTxt {
-                        domain,
-                        url: robots_url,
-                    });
+                    next_job = Some(WorkerMessage::FetchRobotsTxt(domain, robots_url));
                     break;
                 }
 
@@ -108,13 +121,16 @@ impl ManagerActor {
         }
 
         for skipped in skipped_urls.into_iter().rev() {
-            state.frontier.push_front(skipped);
+            state.frontier.push_back(skipped);
         }
 
-        if let Some(job) = next_job {
-            let _ = worker_ref.cast(job);
-        } else {
-            let _ = worker_ref.cast(WorkerMessage::NoWorkAvailable);
+        if let Some(worker_cell) = ractor::registry::where_is(worker_name) {
+            let worker_ref: ActorRef<WorkerMessage> = worker_cell.into();
+            if let Some(job) = next_job {
+                let _ = worker_ref.cast(job);
+            } else {
+                let _ = worker_ref.cast(WorkerMessage::NoWorkAvailable);
+            }
         }
     }
 
@@ -160,9 +176,11 @@ impl Actor for ManagerActor {
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let group_name = format!("manager-shard-{}", shard_idx);
+        ractor::pg::join(group_name, vec![myself.clone().into()]);
         info!("Crawler Manager Shard starting...");
         Ok(ManagerState::new(shard_idx))
     }
@@ -177,16 +195,23 @@ impl Actor for ManagerActor {
             ManagerMessage::AddUrls(urls) => {
                 self.handle_add_urls(state, urls);
             }
-            ManagerMessage::UpdateDomainRules { domain, metadata } => {
+            ManagerMessage::UpdateDomainRules(domain, robots_txt) => {
+                let metadata = if let Some(txt) = robots_txt {
+                    crate::actors::crawler::worker::actor::parse_robots_txt(&txt, &domain)
+                } else {
+                    let mut m = DomainMetadata::default_unfetched();
+                    m.rules_fetched = true;
+                    m
+                };
                 self.handle_update_domain_rules(state, domain, metadata);
             }
             ManagerMessage::RequestWork(worker_ref) => {
                 self.handle_request_work(state, worker_ref);
             }
-            ManagerMessage::DomainRateLimited { domain, url } => {
+            ManagerMessage::DomainRateLimited(domain, url) => {
                 self.handle_rate_limited(state, domain, url);
             }
-            ManagerMessage::CrawlSuccess { domain, url } => {
+            ManagerMessage::CrawlSuccess(domain, url) => {
                 self.handle_crawl_success(state, domain, url);
             }
         }

@@ -1,11 +1,11 @@
-use ractor::RpcReplyPort;
+use ractor::{BytesConvertable, RpcReplyPort};
 use rust_stemmers::{Algorithm, Stemmer};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use stop_words::{LANGUAGE, get};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SearchResult {
     pub url: String,
     pub text: String,
@@ -13,7 +13,7 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ParsedQuery {
     pub original_text: String,
     pub processed_text: String,
@@ -92,9 +92,14 @@ impl ParsedQuery {
 }
 
 pub enum QueryMessage {
-    Query {
-        parsed_query: ParsedQuery,
-        limit: usize,
-        reply: RpcReplyPort<Vec<SearchResult>>,
-    },
+    Query(ParsedQuery, usize, RpcReplyPort<Vec<SearchResult>>),
+}
+
+impl BytesConvertable for QueryMessage {
+    fn into_bytes(self) -> Vec<u8> {
+        unimplemented!("QueryMessage is local only")
+    }
+    fn from_bytes(_bytes: Vec<u8>) -> Self {
+        unimplemented!("QueryMessage is local only")
+    }
 }

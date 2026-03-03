@@ -10,6 +10,7 @@
     - [2. Run it](#2-run-it)
     - [3. Search](#3-search)
   - [Contributing](#contributing)
+  - [Development](#development) - [Running Tests](#running-tests) - [Benchmarking](#benchmarking) - [Profiling](#profiling) - [Async Profiling (Tokio Console)](#async-profiling-tokio-console) - [Install the console tool](#install-the-console-tool) - [Run Pythia in profiling mode](#run-pythia-in-profiling-mode) - [Connect the console](#connect-the-console) - [CPU Profiling (Flamegraphs)](#cpu-profiling-flamegraphs) - [Performance Configuration](#performance-configuration)
   <!--toc:end-->
 
 A concurrent, local search engine and web crawler written in Rust.
@@ -81,3 +82,74 @@ curl "http://127.0.0.1:3000/search?q=What+is+Rust&limit=5"
 We're actively looking for contributors! There is a bunch of open issues (some
 very beginner-friendly) on the tracker. See `CONTRIBUTING.md` for details on
 how to jump in.
+
+---
+
+## Development
+
+### Running Tests
+
+Pythia uses standard Rust unit and integration tests. To run the full test suite:
+
+```bash
+cargo test
+```
+
+### Benchmarking
+
+Benchmarks are managed using Criterion. These measure HTML parsing, frontier
+ingestion, and scheduler efficiency.
+
+To run all benchmarks:
+
+```bash
+cargo bench
+```
+
+Note: Results and flamegraphs (if configured) will be generated in `target/criterion`.
+
+### Profiling
+
+Pythia is instrumented for both async task monitoring and CPU profiling.
+
+### Async Profiling (Tokio Console)
+
+We use tokio-console to monitor actor execution and detect task starvation.
+
+#### Install the console tool
+
+```bash
+cargo install tokio-console
+```
+
+#### Run Pythia in profiling mode
+
+We have configured a custom alias to run with the necessary unstable flags
+and an isolated target directory:
+
+```bash
+cargo console
+```
+
+#### Connect the console
+
+In a separate terminal, run:
+
+```bash
+tokio-console
+```
+
+#### CPU Profiling (Flamegraphs)
+
+CPU profiling is integrated into the benchmark suite via pprof.
+Running cargo bench automatically generates flamegraphs in the benchmark
+output directory.
+
+### Performance Configuration
+
+To avoid constant recompilation when switching between development and
+profiling, the project uses a dedicated target directory for console
+builds defined in `.cargo/config.toml`:
+
+- Default Target: `target/`
+- Console Target: `target/tokio-console`

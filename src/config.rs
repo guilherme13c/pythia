@@ -1,10 +1,13 @@
 use std::env;
 use std::fs;
 use std::str::FromStr;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RunMode {
     CRAWL,
+    PROCESS,
+    INDEX,
     SEARCH,
     FULL,
 }
@@ -15,10 +18,12 @@ impl FromStr for RunMode {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_lowercase().as_str() {
             "crawl" => Ok(RunMode::CRAWL),
+            "process" => Ok(RunMode::PROCESS),
+            "index" => Ok(RunMode::INDEX),
             "search" => Ok(RunMode::SEARCH),
             "full" => Ok(RunMode::FULL),
             _ => Err(format!(
-                "Invalid run mode: '{}'. Expected 'crawl', 'search', or 'full'.",
+                "Invalid run mode: '{}'. Expected 'crawl', 'process', 'index', 'search', or 'full'.",
                 s
             )),
         }
@@ -38,6 +43,10 @@ pub struct Config {
     pub bloom_filter_capacity: usize,
     pub bloom_filter_fp_rate: f64,
     pub run_mode: RunMode,
+    pub node_name: String,
+    pub cluster_port: u16,
+    pub cookie: String,
+    pub seed_node: Option<String>,
 }
 
 impl Config {
@@ -97,7 +106,19 @@ impl Config {
             run_mode: env::var("RUN_MODE")
                 .unwrap_or_else(|_| "full".to_string())
                 .parse()
-                .expect("RUN_MODE must be 'crawl', 'search', or 'full'"),
+                .expect("RUN_MODE must be 'crawl', 'process', 'index', 'search', or 'full'"),
+
+            node_name: std::env::var("NODE_NAME").unwrap_or_else(|_| Uuid::new_v4().to_string()),
+
+            cluster_port: std::env::var("CLUSTER_PORT")
+                .unwrap_or_else(|_| "8000".to_string())
+                .parse()
+                .expect("CLUSTER_PORT must be a valid number"),
+
+            cookie: std::env::var("CLUSTER_COOKIE")
+                .unwrap_or_else(|_| "pythia_secret_cookie".to_string()),
+
+            seed_node: std::env::var("SEED_NODE").ok(),
         }
     }
 
@@ -143,6 +164,10 @@ mod tests {
             bloom_filter_capacity: 100000,
             bloom_filter_fp_rate: 0.001,
             run_mode: RunMode::CRAWL,
+            node_name: "test-node".to_string(),
+            cluster_port: 8000,
+            cookie: "test-cookie".to_string(),
+            seed_node: None,
         };
 
         let seeds = config.load_seeds();
@@ -177,22 +202,26 @@ mod tests {
     #[test]
     fn test_run_mode_parsing() {
         assert_eq!(RunMode::from_str("crawl").unwrap(), RunMode::CRAWL);
+        assert_eq!(RunMode::from_str("process").unwrap(), RunMode::PROCESS);
+        assert_eq!(RunMode::from_str("index").unwrap(), RunMode::INDEX);
         assert_eq!(RunMode::from_str("search").unwrap(), RunMode::SEARCH);
         assert_eq!(RunMode::from_str("full").unwrap(), RunMode::FULL);
 
         assert_eq!(RunMode::from_str("cRAWl").unwrap(), RunMode::CRAWL);
+        assert_eq!(RunMode::from_str("pRoCeSs").unwrap(), RunMode::PROCESS);
+        assert_eq!(RunMode::from_str("IndEX").unwrap(), RunMode::INDEX);
         assert_eq!(RunMode::from_str("sEaRCH").unwrap(), RunMode::SEARCH);
         assert_eq!(RunMode::from_str("fULl").unwrap(), RunMode::FULL);
 
         let err = RunMode::from_str("invalid").unwrap_err();
         assert_eq!(
             err,
-            "Invalid run mode: 'invalid'. Expected 'crawl', 'search', or 'full'."
+            "Invalid run mode: 'invalid'. Expected 'crawl', 'process', 'index', 'search', or 'full'."
         );
     }
 
     #[test]
-    fn test_config_run_mode_env_crawler() {
+    fn test_config_run_mode_env_crawl() {
         unsafe {
             env::set_var("RUN_MODE", "crawl");
         }
@@ -206,7 +235,35 @@ mod tests {
     }
 
     #[test]
-    fn test_config_run_mode_env_api() {
+    fn test_config_run_mode_env_process() {
+        unsafe {
+            env::set_var("RUN_MODE", "process");
+        }
+
+        let config = Config::load();
+        assert_eq!(config.run_mode, RunMode::PROCESS);
+
+        unsafe {
+            env::remove_var("RUN_MODE");
+        }
+    }
+
+    #[test]
+    fn test_config_run_mode_env_index() {
+        unsafe {
+            env::set_var("RUN_MODE", "index");
+        }
+
+        let config = Config::load();
+        assert_eq!(config.run_mode, RunMode::INDEX);
+
+        unsafe {
+            env::remove_var("RUN_MODE");
+        }
+    }
+
+    #[test]
+    fn test_config_run_mode_env_search() {
         unsafe {
             env::set_var("RUN_MODE", "search");
         }

@@ -32,50 +32,59 @@ impl WorkerActor {
             Err(_) => "unknown".to_string(),
         };
 
+        let manager_group = format!("manager-shard-{}", state.shard_idx);
+        let primary_manager = ractor::pg::get_members(&manager_group)
+            .first()
+            .map(|cell| -> ActorRef<ManagerMessage> { cell.clone().into() });
+
         match state.http_client.get(&url).send().await {
             Ok(response) if response.status().is_success() => {
-                let _ = state.primary_manager.cast(ManagerMessage::CrawlSuccess {
-                    domain: domain.clone(),
-                    url: url.clone(),
-                });
+                if let Some(manager) = &primary_manager {
+                    let _ = manager.cast(ManagerMessage::CrawlSuccess(domain.clone(), url.clone()));
+                }
 
                 if let Ok(html) = response.text().await {
-                    let num_shards = state.manager_cluster.len();
-                    let (routed_links, raw_text) = extract_links_and_text(&html, &url, num_shards);
+                    let url_clone = url.clone();
+
+                    let num_manager_shards = state.num_manager_shards;
+                    let (routed_links, raw_text) = tokio::task::spawn_blocking(move || {
+                        extract_links_and_text(&html, &url_clone, num_manager_shards)
+                    })
+                    .await
+                    .expect("Spawn blocking failed");
 
                     debug!("Extracted links and text from {}", url);
 
-                    for (shard_idx, urls) in routed_links {
-                        let _ =
-                            state.manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(urls));
+                    let processors = ractor::pg::get_members(&"processors".to_string());
+                    if let Some(cell) = processors.choose(&mut rand::rng()) {
+                        let processor_ref: ActorRef<ProcessorMessage> = cell.clone().into();
+                        let _ = processor_ref
+                            .cast(ProcessorMessage::ProcessDocument(url.clone(), raw_text));
                     }
 
-                    let processor_ref = {
-                        let mut rng = rand::rng();
-                        state.processor_pool.choose(&mut rng).unwrap().clone()
-                    };
+                    for (shard_idx, urls) in routed_links {
+                        let group_name = format!("manager-shard-{}", shard_idx);
+                        let manager_nodes = ractor::pg::get_members(&group_name);
 
-                    let _ = processor_ref.cast(ProcessorMessage::ProcessDocument {
-                        url: url.clone(),
-                        raw_text,
-                    });
+                        if let Some(cell) = manager_nodes.first() {
+                            let manager_ref: ActorRef<ManagerMessage> = cell.clone().into();
+                            let _ = manager_ref.cast(ManagerMessage::AddUrls(urls));
+                        }
+                    }
                 }
             }
             Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                let _ = state
-                    .primary_manager
-                    .cast(ManagerMessage::DomainRateLimited {
-                        domain,
-                        url: url.clone(),
-                    });
+                if let Some(manager) = &primary_manager {
+                    let _ = manager.cast(ManagerMessage::DomainRateLimited(domain, url.clone()));
+                }
             }
             Ok(response) => warn!("Failed to fetch {} - Status: {}", url, response.status()),
             Err(e) => warn!("Network error fetching {}: {}", url, e),
         }
 
-        let _ = state
-            .primary_manager
-            .cast(ManagerMessage::RequestWork(myself));
+        if let Some(manager) = &primary_manager {
+            let _ = manager.cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        }
     }
 
     async fn handle_fetch_robots_txt(
@@ -87,66 +96,51 @@ impl WorkerActor {
     ) {
         debug!("Worker fetching robots.txt for: {}", domain);
 
-        let metadata = match state.http_client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(text) = response.text().await {
-                    info!("Successfully parsed robots.txt for {}", domain);
-                    parse_robots_txt(&text, &domain)
-                } else {
-                    let mut m = DomainMetadata::default_unfetched();
-                    m.rules_fetched = true;
-                    m
-                }
-            }
-            _ => {
-                debug!(
-                    "No robots.txt found for {}, assuming default permissive rules.",
-                    domain
-                );
-                let mut m = DomainMetadata::default_unfetched();
-                m.rules_fetched = true;
-                m
-            }
+        let robots_txt = match state.http_client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => response.text().await.ok(),
+            _ => None,
         };
-
-        let _ = state
-            .primary_manager
-            .cast(ManagerMessage::UpdateDomainRules { domain, metadata });
-        let _ = state
-            .primary_manager
-            .cast(ManagerMessage::RequestWork(myself));
+        let manager_group = format!("manager-shard-{}", state.shard_idx);
+        if let Some(cell) = ractor::pg::get_members(&manager_group).first() {
+            let manager: ActorRef<ManagerMessage> = cell.clone().into();
+            let _ = manager.cast(ManagerMessage::UpdateDomainRules(domain, robots_txt));
+            let _ = manager.cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        }
     }
 }
 
 impl Actor for WorkerActor {
     type Msg = WorkerMessage;
     type State = WorkerState;
-    type Arguments = (
-        Vec<ActorRef<ManagerMessage>>,
-        ActorRef<ManagerMessage>,
-        Vec<ActorRef<ProcessorMessage>>,
-    );
+    type Arguments = (usize, usize);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (manager_cluster, primary_manager, processor_pool): Self::Arguments,
+        (shard_idx, num_manager_shards): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Worker Actor starting up...");
 
-        let client = Client::builder()
+        let http_client = Client::builder()
             .user_agent("PythiaSearchBot/1.0 (guilhermesccaporali@protonmail.com)")
             .timeout(Duration::from_secs(3))
             .build()
             .expect("Failed to build HTTP client");
 
-        let _ = primary_manager.cast(ManagerMessage::RequestWork(myself.clone()));
+        let manager_group = format!("manager-shard-{}", shard_idx);
+        let primary_manager = ractor::pg::get_members(&manager_group)
+            .first()
+            .map(|cell| -> ActorRef<ManagerMessage> { cell.clone().into() });
+
+        if let Some(manager_cell) = &primary_manager {
+            let manager_ref: ActorRef<ManagerMessage> = manager_cell.clone();
+            let _ = manager_ref.cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        }
 
         Ok(WorkerState {
-            http_client: client,
-            manager_cluster,
-            primary_manager,
-            processor_pool,
+            http_client,
+            shard_idx,
+            num_manager_shards,
         })
     }
 
@@ -160,15 +154,18 @@ impl Actor for WorkerActor {
             WorkerMessage::Fetch(url_str) => {
                 self.handle_fetch(state, myself, url_str).await;
             }
-            WorkerMessage::FetchRobotsTxt { domain, url } => {
+            WorkerMessage::FetchRobotsTxt(domain, url) => {
                 self.handle_fetch_robots_txt(state, myself, domain, url)
                     .await;
             }
             WorkerMessage::NoWorkAvailable => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                let _ = state
-                    .primary_manager
-                    .cast(ManagerMessage::RequestWork(myself));
+                let manager_group = format!("manager-shard-{}", state.shard_idx);
+                let _ = ractor::pg::get_members(&manager_group)
+                    .first()
+                    .map(|cell| -> ActorRef<ManagerMessage> { cell.clone().into() })
+                    .expect("Failed to get primary manager")
+                    .cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
             }
         }
         Ok(())
@@ -219,7 +216,7 @@ fn extract_links_and_text(
     (routed_links, raw_text)
 }
 
-fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
+pub fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
     let mut metadata = DomainMetadata::default_unfetched();
     metadata.rules_fetched = true;
 

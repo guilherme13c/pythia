@@ -29,7 +29,7 @@ impl QueryActor {
                 match db.open_table("search_index").execute().await {
                     Ok(t) => break t,
                     Err(e) => {
-                        if retries > 10 {
+                        if retries > 5 {
                             panic!("Failed to open table for shard {}: {}", i, e);
                         }
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -360,11 +360,7 @@ impl Actor for QueryActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            QueryMessage::Query {
-                parsed_query,
-                limit,
-                reply,
-            } => {
+            QueryMessage::Query(parsed_query, limit, reply) => {
                 let results = match Self::execute_query(state, &parsed_query, limit).await {
                     Ok(res) => res,
                     Err(e) => {

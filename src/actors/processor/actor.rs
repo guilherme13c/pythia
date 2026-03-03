@@ -65,13 +65,12 @@ impl ProcessorActor {
                     url
                 );
 
-                let shard_idx = get_target_shard(&url, state.indexer_cluster.len());
-
-                let _ = state.indexer_cluster[shard_idx].cast(IndexerMessage::StoreChunks {
-                    url,
-                    chunks,
-                    vectors: embeddings,
-                });
+                let shard_idx = get_target_shard(&url, state.num_shards);
+                let group_name = format!("indexer-shard-{}", shard_idx);
+                if let Some(cell) = ractor::pg::get_members(&group_name).first() {
+                    let indexer_ref: ActorRef<IndexerMessage> = cell.clone().into();
+                    let _ = indexer_ref.cast(IndexerMessage::StoreChunks(url, chunks, embeddings));
+                }
             }
             Err(e) => {
                 error!("Failed to generate embeddings for {}: {}", url, e);
@@ -83,16 +82,18 @@ impl ProcessorActor {
 impl Actor for ProcessorActor {
     type Msg = ProcessorMessage;
     type State = ProcessorState;
-    type Arguments = Vec<ActorRef<IndexerMessage>>;
+    type Arguments = usize;
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
-        indexer_cluster: Self::Arguments,
+        myself: ActorRef<Self::Msg>,
+        num_shards: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        ractor::pg::join("processors".to_string(), vec![myself.clone().into()]);
+
         info!("Processor Actor starting. Loading AI Embedding Model...");
 
-        let model = TextEmbedding::try_new(
+        let embedding_model = TextEmbedding::try_new(
             InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
         )
         .expect("Failed to initialize the Embedding Model");
@@ -100,8 +101,8 @@ impl Actor for ProcessorActor {
         info!("AI Model loaded successfully!");
 
         Ok(ProcessorState {
-            embedding_model: model,
-            indexer_cluster,
+            embedding_model,
+            num_shards,
         })
     }
 
@@ -112,7 +113,7 @@ impl Actor for ProcessorActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            ProcessorMessage::ProcessDocument { url, raw_text } => {
+            ProcessorMessage::ProcessDocument(url, raw_text) => {
                 self.handle_process_document(state, url, raw_text);
             }
         }

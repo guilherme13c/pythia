@@ -5,7 +5,9 @@ use crate::actors::indexer::actor::IndexerActor;
 use crate::actors::processor::actor::ProcessorActor;
 use crate::actors::query::actor::QueryActor;
 use crate::config::RunMode;
+
 use ractor::Actor;
+use ractor_cluster::NodeServer;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use tracing::info;
@@ -20,16 +22,43 @@ pub mod config;
 async fn main() {
     let app_config = config::Config::load();
 
-    let env_filter = EnvFilter::new(&app_config.log_level);
-    let fmt_layer = tracing_subscriber::fmt::layer();
-    let console_layer = console_subscriber::spawn();
+    let console_layer = console_subscriber::ConsoleLayer::builder().spawn();
+    let filter_layer = EnvFilter::new(&app_config.log_level);
+    let fmt_layer = tracing_subscriber::fmt::layer().with_target(false);
 
     tracing_subscriber::registry()
         .with(console_layer)
+        .with(filter_layer)
         .with(fmt_layer)
-        .with(env_filter)
         .init();
 
+    let server = NodeServer::new(
+        app_config.cluster_port,
+        app_config.cookie.clone(),
+        app_config.node_name.clone(),
+        app_config.host.clone(),
+        None,
+        None,
+    );
+
+    let (node_ref, _) = Actor::spawn(Some("cluster_node".to_string()), server, ())
+        .await
+        .expect("Failed to start cluster node");
+
+    if let Some(seed) = &app_config.seed_node {
+        info!("Connecting to seed node: {}", seed);
+        if let Err(e) = ractor_cluster::client_connect(
+            &node_ref,
+            format!("{}:{}", seed, app_config.cluster_port), // e.g., "crawler-node-1:8000"
+        )
+        .await
+        {
+            tracing::error!("Failed to connect to seed node: {}", e);
+        }
+    }
+
+    let run_indexer = matches!(app_config.run_mode, RunMode::INDEX | RunMode::FULL);
+    let run_processor = matches!(app_config.run_mode, RunMode::PROCESS | RunMode::FULL);
     let run_crawler = matches!(app_config.run_mode, RunMode::CRAWL | RunMode::FULL);
     let run_search = matches!(app_config.run_mode, RunMode::SEARCH | RunMode::FULL);
 
@@ -41,8 +70,9 @@ async fn main() {
     let mut indexer_cluster = Vec::new();
     let mut processor_pool = Vec::new();
     let mut manager_cluster = Vec::new();
+    let mut query_pool = Vec::new();
 
-    if run_crawler {
+    if run_indexer {
         for i in 0..app_config.indexer_shards {
             let name = format!("indexer-{}", i);
             let (indexer_ref, _) = Actor::spawn(Some(name), IndexerActor, i)
@@ -50,16 +80,20 @@ async fn main() {
                 .expect("Failed to start Indexer");
             indexer_cluster.push(indexer_ref);
         }
+    }
 
+    if run_processor {
         for i in 0..app_config.processor_pool_size {
             let name = format!("processor-{}", i);
             let (processor_ref, _) =
-                Actor::spawn(Some(name), ProcessorActor, indexer_cluster.clone())
+                Actor::spawn(Some(name), ProcessorActor, app_config.indexer_shards)
                     .await
                     .expect("Failed to start Processor");
             processor_pool.push(processor_ref);
         }
+    }
 
+    if run_crawler {
         for i in 0..app_config.crawler_shards {
             let name = format!("manager-{}", i);
             let (manager_ref, _) = Actor::spawn(Some(name), ManagerActor, i)
@@ -68,17 +102,13 @@ async fn main() {
             manager_cluster.push(manager_ref);
         }
 
-        for (shard_idx, primary_manager) in manager_cluster.iter().enumerate() {
+        for (shard_idx, _) in manager_cluster.iter().enumerate() {
             for w in 1..=app_config.workers_per_crawler_shard {
                 let worker_name = format!("worker-{}-{}", shard_idx, w);
                 Actor::spawn(
                     Some(worker_name),
                     WorkerActor,
-                    (
-                        manager_cluster.clone(),
-                        primary_manager.clone(),
-                        processor_pool.clone(),
-                    ),
+                    (shard_idx, app_config.crawler_shards),
                 )
                 .await
                 .expect("Failed to start Worker");
@@ -98,7 +128,6 @@ async fn main() {
         }
     }
 
-    let mut query_pool = Vec::new();
     if run_search {
         for i in 0..app_config.query_pool_size {
             let name = format!("query-{}", i);

@@ -1,8 +1,6 @@
-use crate::actors::indexer::messages::IndexerMessage;
 use fastembed::TextEmbedding;
-use ractor::ActorRef;
 
 pub struct ProcessorState {
     pub embedding_model: TextEmbedding,
-    pub indexer_cluster: Vec<ActorRef<IndexerMessage>>,
+    pub num_shards: usize,
 }
