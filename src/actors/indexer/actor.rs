@@ -1,14 +1,18 @@
-use arrow::array::{FixedSizeListArray, StringArray};
+use arrow::array::{FixedSizeListArray, Float32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::{RecordBatch, RecordBatchIterator};
+use futures::StreamExt;
+use lance_index::scalar::FullTextSearchQuery;
 use lancedb::index::Index;
 use lancedb::index::scalar::FtsIndexBuilder;
+use lancedb::query::{ExecutableQuery, QueryBase};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::Arc;
 use tracing::{error, info};
 
 use super::messages::IndexerMessage;
 use super::state::IndexerState;
+use crate::actors::query::messages::{QueryMessage, QueryNetworkMessage, SearchResult};
 
 pub struct IndexerActor;
 
@@ -113,6 +117,105 @@ impl IndexerActor {
             Err(e) => error!("Database error inserting {}: {}", url, e),
         }
     }
+
+    pub fn parse_record_batch(batch: &RecordBatch, is_vector: bool) -> Vec<SearchResult> {
+        let mut results = Vec::with_capacity(batch.num_rows());
+        let url_array = batch
+            .column_by_name("url")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let text_array = batch
+            .column_by_name("text")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        let dist_col = if is_vector {
+            batch.column_by_name("_distance")
+        } else {
+            batch
+                .column_by_name("score")
+                .or_else(|| batch.column_by_name("_score"))
+        };
+        let dist_array = dist_col
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .unwrap();
+
+        for i in 0..batch.num_rows() {
+            results.push(SearchResult {
+                url: url_array.value(i).to_string(),
+                text: text_array.value(i).to_string(),
+                distance: dist_array.value(i),
+                snippet: String::new(),
+            });
+        }
+        results
+    }
+
+    async fn handle_search_request(
+        &self,
+        state: &mut IndexerState,
+        request_id: String,
+        reply_to: String,
+        query_vector: Vec<f32>,
+        fts_query: String,
+        site_filter: Option<String>,
+        limit: usize,
+    ) {
+        let mut shard_vec_results = Vec::new();
+        let mut shard_fts_results = Vec::new();
+
+        let mut vec_query = state
+            .table
+            .query()
+            .nearest_to(query_vector.clone())
+            .unwrap();
+        if let Some(domain) = &site_filter {
+            vec_query = vec_query.only_if(format!("url LIKE '%{}%'", domain));
+        }
+
+        if let Ok(mut stream) = vec_query.limit(limit).execute().await {
+            while let Some(Ok(batch)) = stream.next().await {
+                shard_vec_results.extend(Self::parse_record_batch(&batch, true));
+            }
+        }
+
+        if !fts_query.is_empty() {
+            let mut fts_q = state
+                .table
+                .query()
+                .full_text_search(FullTextSearchQuery::new(fts_query));
+            if let Some(domain) = &site_filter {
+                fts_q = fts_q.only_if(format!("url LIKE '%{}%'", domain));
+            }
+
+            if let Ok(mut stream) = fts_q.limit(limit).execute().await {
+                while let Some(Ok(batch)) = stream.next().await {
+                    shard_fts_results.extend(Self::parse_record_batch(&batch, false));
+                }
+            }
+        }
+
+        if let Some(cell) = ractor::pg::get_members(&reply_to).first() {
+            let query_actor: ActorRef<QueryMessage> = cell.clone().into();
+            let msg = QueryNetworkMessage::IndexerReply {
+                request_id,
+                shard_vec_results,
+                shard_fts_results,
+            };
+            let _ = query_actor.cast(QueryMessage::Network(msg));
+        } else {
+            error!(
+                "Could not find query actor on the network to reply to: {}",
+                reply_to
+            );
+        }
+    }
 }
 
 impl Actor for IndexerActor {
@@ -126,9 +229,8 @@ impl Actor for IndexerActor {
         shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let group_name = format!("indexer-shard-{}", shard_idx);
-        ractor::pg::join(group_name, vec![myself.clone().into()]);
 
-        info!("Starting Vector DB Indexer...");
+        ractor::pg::join(group_name, vec![myself.clone().into()]);
 
         let table = Self::initialize_database(shard_idx).await;
 
@@ -144,6 +246,26 @@ impl Actor for IndexerActor {
         match message {
             IndexerMessage::StoreChunks(url, chunks, vectors) => {
                 self.handle_store_chunks(state, url, chunks, vectors).await;
+            }
+
+            IndexerMessage::SearchRequest {
+                request_id,
+                reply_to,
+                query_vector,
+                fts_query,
+                site_filter,
+                limit,
+            } => {
+                self.handle_search_request(
+                    state,
+                    request_id,
+                    reply_to,
+                    query_vector,
+                    fts_query,
+                    site_filter,
+                    limit,
+                )
+                .await;
             }
         }
         Ok(())

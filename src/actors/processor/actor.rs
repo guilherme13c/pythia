@@ -1,7 +1,9 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::hash_map::DefaultHasher;
+use std::env;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use tracing::{debug, error, info};
 use url::Url;
 
@@ -25,6 +27,19 @@ pub fn get_target_shard(url_str: &str, num_shards: usize) -> usize {
 }
 
 impl ProcessorActor {
+    fn get_cache_dir() -> PathBuf {
+        let path = env::var("FASTEMBED_CACHE_PATH")
+            .unwrap_or_else(|_| "/app/models/fastembed".to_string());
+        PathBuf::from(path)
+    }
+
+    fn initialize_model() -> TextEmbedding {
+        TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(Self::get_cache_dir()),
+        )
+        .unwrap()
+    }
+
     fn clean_text(raw_text: &str) -> String {
         raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
@@ -93,10 +108,7 @@ impl Actor for ProcessorActor {
 
         info!("Processor Actor starting. Loading AI Embedding Model...");
 
-        let embedding_model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
-        )
-        .expect("Failed to initialize the Embedding Model");
+        let embedding_model = Self::initialize_model();
 
         info!("AI Model loaded successfully!");
 

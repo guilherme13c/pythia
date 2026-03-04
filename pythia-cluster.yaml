@@ -1,0 +1,152 @@
+# 1. Shared Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pythia-config
+data:
+  CLUSTER_COOKIE: "pythia_local_dev_cookie"
+  SEED_NODE: "query-service" # Other nodes will look for this address to join the cluster
+  CLUSTER_PORT: "8000"
+  CRAWLER_SHARDS: "3"
+  INDEXER_SHARDS: "3"
+  PROCESSOR_POOL_SIZE: "4"
+  RUST_LOG: "info"
+
+---
+# 2. Query Service (Seed Node + HTTP API)
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-service
+spec:
+  selector:
+    app: query
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+    - name: cluster
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: query
+  template:
+    metadata:
+      labels:
+        app: query
+    spec:
+      containers:
+        - name: query
+          image: pythia:v1
+          imagePullPolicy: Never # Crucial: tells K8s to use your local Docker image, not Docker Hub
+          command: ["./query"]
+          envFrom:
+            - configMapRef:
+                name: pythia-config
+
+---
+# 3. Processor (Stateless - easy to scale!)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor
+spec:
+  replicas: 2 # You can change this number anytime to scale your text processing
+  selector:
+    matchLabels:
+      app: processor
+  template:
+    metadata:
+      labels:
+        app: processor
+    spec:
+      containers:
+        - name: processor
+          image: pythia:v1
+          imagePullPolicy: Never
+          command: ["./processor"]
+          envFrom:
+            - configMapRef:
+                name: pythia-config
+
+---
+# 4. Indexer (Stateful - requires storage and strict Shard IDs)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: indexer
+spec:
+  serviceName: "indexer"
+  replicas: 3 # MUST match INDEXER_SHARDS in the ConfigMap
+  selector:
+    matchLabels:
+      app: indexer
+  template:
+    metadata:
+      labels:
+        app: indexer
+    spec:
+      containers:
+        - name: indexer
+          image: pythia:v1
+          imagePullPolicy: Never
+          command: ["./indexer"]
+          envFrom:
+            - configMapRef:
+                name: pythia-config
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+# 5. Crawler (Stateful - requires storage for SQLite queue and strict Shard IDs)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: crawler
+spec:
+  serviceName: "crawler"
+  replicas: 3 # MUST match CRAWLER_SHARDS in the ConfigMap
+  selector:
+    matchLabels:
+      app: crawler
+  template:
+    metadata:
+      labels:
+        app: crawler
+    spec:
+      containers:
+        - name: crawler
+          image: pythia:v1
+          imagePullPolicy: Never
+          command: ["./crawler"]
+          envFrom:
+            - configMapRef:
+                name: pythia-config
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

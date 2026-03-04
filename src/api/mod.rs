@@ -56,6 +56,7 @@ mod tests {
                         snippet: "<b>Rust</b> is awesome".to_string(),
                     }]);
                 }
+                QueryMessage::Network(_) => {}
             }
             Ok(())
         }
