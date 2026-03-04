@@ -34,7 +34,7 @@ async fn main() {
     let mut query_pool = Vec::new();
     for i in 0..app_config.query_pool_size {
         let name = format!("query-{}", i);
-        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, app_config.indexer_shards)
+        let (query_ref, _) = Actor::spawn(Some(name), QueryActor, ())
             .await
             .expect("Failed to start Searcher");
         query_pool.push(query_ref);

@@ -4,11 +4,8 @@ use pythia::actors::crawler::worker::actor::WorkerActor;
 use pythia::config;
 use ractor::Actor;
 use ractor_cluster::NodeServer;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-use url::Url;
 
 #[tokio::main]
 async fn main() {
@@ -45,44 +42,24 @@ async fn main() {
         .await;
     }
 
-    let start_idx = app_config.shard_id.unwrap_or(0);
-    let end_idx = app_config
-        .shard_id
-        .map(|i| i + 1)
-        .unwrap_or(app_config.crawler_shards);
+    let shard_idx = app_config.shard_id;
+    let name = format!("manager-{}", shard_idx);
 
-    let mut manager_cluster = Vec::new();
+    let (manager_ref, _) = Actor::spawn(Some(name), ManagerActor, shard_idx)
+        .await
+        .unwrap();
 
-    for i in start_idx..end_idx {
-        let name = format!("manager-{}", i);
-        let (manager_ref, _) = Actor::spawn(Some(name), ManagerActor, i).await.unwrap();
-        manager_cluster.push(manager_ref.clone());
-
-        for w in 1..=app_config.workers_per_crawler_shard {
-            let worker_name = format!("worker-{}-{}", i, w);
-            Actor::spawn(
-                Some(worker_name),
-                WorkerActor,
-                (i, app_config.crawler_shards),
-            )
+    for w in 1..=app_config.workers_per_crawler_shard {
+        let worker_name = format!("worker-{}-{}", shard_idx, w);
+        Actor::spawn(Some(worker_name), WorkerActor, shard_idx)
             .await
             .unwrap();
-        }
     }
 
-    if let Some(0) = app_config.shard_id {
+    if shard_idx == 0 {
         info!("Shard 0 injecting seed URLs...");
         let seeds = app_config.load_seeds();
-        for seed in seeds {
-            let domain = Url::parse(&seed).unwrap().host_str().unwrap().to_string();
-            let mut hasher = DefaultHasher::new();
-            domain.hash(&mut hasher);
-            let shard_idx = (hasher.finish() as usize) % app_config.crawler_shards;
-
-            if shard_idx == 0 {
-                let _ = manager_cluster[0].cast(ManagerMessage::AddUrls(vec![seed]));
-            }
-        }
+        let _ = manager_ref.cast(ManagerMessage::AddUrls(seeds));
     }
 
     tokio::signal::ctrl_c().await.unwrap();

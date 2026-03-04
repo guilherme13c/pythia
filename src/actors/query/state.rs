@@ -16,6 +16,5 @@ pub struct PendingRequest {
 pub struct QueryState {
     pub embedding_model: TextEmbedding,
     pub reranker_model: TextRerank,
-    pub indexer_shards: usize,
     pub pending_requests: HashMap<String, PendingRequest>,
 }

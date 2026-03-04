@@ -59,78 +59,74 @@ impl ManagerActor {
         let queue_len = state.frontier.len();
 
         for _ in 0..queue_len {
-            if let Some(url_str) = state.frontier.pop_front() {
-                let parsed_url = match Url::parse(&url_str) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        warn!("Failed to parse URL '{}': {}", url_str, e);
-                        continue;
-                    }
-                };
-
-                let domain = match parsed_url.host_str() {
-                    Some(d) => d.to_string(),
-                    _ => continue,
-                };
-
-                let path = parsed_url.path();
-                let scheme = parsed_url.scheme();
-
-                let metadata = state
-                    .domain_metadata
-                    .entry(domain.clone())
-                    .or_insert_with(DomainMetadata::default_unfetched);
-
-                if !metadata.rules_fetched {
-                    let robots_url = format!("{}://{}/robots.txt", scheme, domain);
-                    skipped_urls.push(url_str);
-                    metadata.rules_fetched = true;
-
-                    next_job = Some(WorkerMessage::FetchRobotsTxt(domain, robots_url));
-                    break;
-                }
-
-                if !metadata.can_crawl(path) {
-                    debug!("Dropped URL due to robots.txt Disallow: {}", url_str);
-                    continue;
-                }
-
-                let now = Instant::now();
-
-                if let Some(backoff_time) = metadata.backoff_until {
-                    if now < backoff_time {
-                        skipped_urls.push(url_str);
-                        continue;
-                    } else {
-                        metadata.backoff_until = None;
-                    }
-                }
-
-                let last_hit = metadata
-                    .last_hit
-                    .unwrap_or_else(|| now - (metadata.crawl_delay * 2));
-
-                if now.duration_since(last_hit) >= metadata.crawl_delay {
-                    metadata.last_hit = Some(now);
-                    next_job = Some(WorkerMessage::Fetch(url_str));
-                    break;
-                } else {
-                    skipped_urls.push(url_str);
-                }
+            if let Some(url_str) = state.frontier.pop_front()
+                && let Some(job) = self.evaluate_url(state, &url_str, &mut skipped_urls)
+            {
+                next_job = Some(job);
+                break;
             }
         }
 
         for skipped in skipped_urls.into_iter().rev() {
-            state.frontier.push_back(skipped);
+            state.frontier.push_front(skipped);
         }
 
+        self.dispatch_job(worker_name, next_job);
+    }
+
+    fn evaluate_url(
+        &self,
+        state: &mut ManagerState,
+        url_str: &str,
+        skipped_urls: &mut Vec<String>,
+    ) -> Option<WorkerMessage> {
+        let parsed_url = Url::parse(url_str).ok()?;
+        let domain = parsed_url.host_str()?.to_string();
+
+        let metadata = state
+            .domain_metadata
+            .entry(domain.clone())
+            .or_insert_with(DomainMetadata::default_unfetched);
+
+        if !metadata.rules_fetched {
+            metadata.rules_fetched = true;
+            skipped_urls.push(url_str.to_string());
+            let robots_url = format!("{}://{}/robots.txt", parsed_url.scheme(), domain);
+            return Some(WorkerMessage::FetchRobotsTxt(domain, robots_url));
+        }
+
+        if !metadata.can_crawl(parsed_url.path()) {
+            debug!("Dropped URL due to robots.txt Disallow: {}", url_str);
+            return None; // Drop permanently
+        }
+
+        let now = Instant::now();
+
+        if let Some(backoff_time) = metadata.backoff_until {
+            if now < backoff_time {
+                skipped_urls.push(url_str.to_string());
+                return None;
+            }
+            metadata.backoff_until = None;
+        }
+
+        let last_hit = metadata
+            .last_hit
+            .unwrap_or_else(|| now - (metadata.crawl_delay * 2));
+        if now.duration_since(last_hit) >= metadata.crawl_delay {
+            metadata.last_hit = Some(now);
+            return Some(WorkerMessage::Fetch(url_str.to_string()));
+        }
+
+        skipped_urls.push(url_str.to_string());
+        None
+    }
+
+    fn dispatch_job(&self, worker_name: String, job: Option<WorkerMessage>) {
         if let Some(worker_cell) = ractor::registry::where_is(worker_name) {
             let worker_ref: ActorRef<WorkerMessage> = worker_cell.into();
-            if let Some(job) = next_job {
-                let _ = worker_ref.cast(job);
-            } else {
-                let _ = worker_ref.cast(WorkerMessage::NoWorkAvailable);
-            }
+            let msg = job.unwrap_or(WorkerMessage::NoWorkAvailable);
+            let _ = worker_ref.cast(msg);
         }
     }
 
@@ -179,9 +175,14 @@ impl Actor for ManagerActor {
         myself: ActorRef<Self::Msg>,
         shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let group_name = format!("manager-shard-{}", shard_idx);
-        ractor::pg::join(group_name, vec![myself.clone().into()]);
+        ractor::pg::join("crawler_managers".to_string(), vec![myself.clone().into()]);
+        ractor::pg::join(
+            format!("manager-shard-{}", shard_idx),
+            vec![myself.clone().into()],
+        );
+
         info!("Crawler Manager Shard starting...");
+
         Ok(ManagerState::new(shard_idx))
     }
 
@@ -302,5 +303,69 @@ mod tests {
         let metadata = state.domain_metadata.get(&domain).unwrap();
         assert_eq!(metadata.consecutive_errors, 0);
         assert!(metadata.backoff_until.is_none());
+    }
+
+    #[test]
+    fn test_evaluate_url_rules_unfetched() {
+        let manager = ManagerActor;
+        let mut state = ManagerState::in_memory();
+        let mut skipped = Vec::new();
+
+        let job = manager.evaluate_url(&mut state, "https://example.com/page", &mut skipped);
+
+        match job {
+            Some(WorkerMessage::FetchRobotsTxt(domain, url)) => {
+                assert_eq!(domain, "example.com");
+                assert_eq!(url, "https://example.com/robots.txt");
+            }
+            _ => panic!("Expected FetchRobotsTxt"),
+        }
+
+        // It should have safely stored the original URL in the skipped list to try again later
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0], "https://example.com/page");
+    }
+
+    #[test]
+    fn test_evaluate_url_disallowed() {
+        let manager = ManagerActor;
+        let mut state = ManagerState::in_memory();
+        let mut skipped = Vec::new();
+
+        let mut metadata = DomainMetadata::default_unfetched();
+        metadata.rules_fetched = true;
+        metadata.disallowed_paths.push("/private".to_string());
+        state
+            .domain_metadata
+            .insert("example.com".to_string(), metadata);
+
+        let job = manager.evaluate_url(&mut state, "https://example.com/private/doc", &mut skipped);
+
+        assert!(job.is_none());
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn test_evaluate_url_ready_to_fetch() {
+        let manager = ManagerActor;
+        let mut state = ManagerState::in_memory();
+        let mut skipped = Vec::new();
+
+        let mut metadata = DomainMetadata::default_unfetched();
+        metadata.rules_fetched = true;
+        metadata.last_hit = Some(tokio::time::Instant::now() - std::time::Duration::from_secs(100));
+        state
+            .domain_metadata
+            .insert("example.com".to_string(), metadata);
+
+        let job = manager.evaluate_url(&mut state, "https://example.com/page", &mut skipped);
+
+        match job {
+            Some(WorkerMessage::Fetch(url)) => {
+                assert_eq!(url, "https://example.com/page");
+            }
+            _ => panic!("Expected Fetch"),
+        }
+        assert!(skipped.is_empty());
     }
 }

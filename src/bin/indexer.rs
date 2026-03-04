@@ -39,7 +39,7 @@ async fn main() {
         .await;
     }
 
-    let shard_idx = app_config.shard_id.expect("Indexer MUST have a SHARD_ID");
+    let shard_idx = app_config.shard_id;
     let name = format!("indexer-{}", shard_idx);
     Actor::spawn(Some(name), IndexerActor, shard_idx)
         .await

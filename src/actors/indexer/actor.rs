@@ -228,9 +228,7 @@ impl Actor for IndexerActor {
         myself: ActorRef<Self::Msg>,
         shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let group_name = format!("indexer-shard-{}", shard_idx);
-
-        ractor::pg::join(group_name, vec![myself.clone().into()]);
+        ractor::pg::join("indexers".to_string(), vec![myself.clone().into()]);
 
         let table = Self::initialize_database(shard_idx).await;
 

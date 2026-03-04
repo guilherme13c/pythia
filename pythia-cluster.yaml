@@ -5,12 +5,13 @@ metadata:
   name: pythia-config
 data:
   CLUSTER_COOKIE: "pythia_local_dev_cookie"
-  SEED_NODE: "query-service" # Other nodes will look for this address to join the cluster
+  SEED_NODE: "query-service"
   CLUSTER_PORT: "8000"
-  CRAWLER_SHARDS: "3"
-  INDEXER_SHARDS: "3"
-  PROCESSOR_POOL_SIZE: "4"
   RUST_LOG: "info"
+  WORKERS_PER_SHARD: "2"
+  QUERY_POOL_SIZE: "2"
+  BLOOM_FILTER_CAPACITY: "100000"
+  BLOOM_FILTER_FP_RATE: "0.001"
 
 ---
 # 2. Query Service (Seed Node + HTTP API)

@@ -40,9 +40,7 @@ async fn main() {
     }
 
     let name = format!("processor-{}", uuid::Uuid::new_v4());
-    Actor::spawn(Some(name), ProcessorActor, app_config.indexer_shards)
-        .await
-        .unwrap();
+    Actor::spawn(Some(name), ProcessorActor, ()).await.unwrap();
 
     tokio::signal::ctrl_c().await.unwrap();
 }

@@ -202,12 +202,12 @@ impl QueryActor {
 impl Actor for QueryActor {
     type Msg = QueryMessage;
     type State = QueryState;
-    type Arguments = usize;
+    type Arguments = ();
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        num_shards: Self::Arguments,
+        _args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Starting Searcher Actor...");
 
@@ -218,7 +218,6 @@ impl Actor for QueryActor {
         Ok(QueryState {
             embedding_model: Self::initialize_model(),
             reranker_model: Self::initialize_reranker(),
-            indexer_shards: num_shards,
             pending_requests: HashMap::new(),
         })
     }
@@ -238,6 +237,16 @@ impl Actor for QueryActor {
                     .unwrap();
                 let query_vector = embeddings[0].clone();
 
+                let candidate_limit = std::cmp::max(limit * 5, 250);
+
+                let indexers = ractor::pg::get_members(&"indexers".to_string());
+                let expected_replies = indexers.len();
+
+                if expected_replies == 0 {
+                    let _ = reply.send(vec![]);
+                    return Ok(());
+                }
+
                 state.pending_requests.insert(
                     request_id.clone(),
                     PendingRequest {
@@ -245,38 +254,22 @@ impl Actor for QueryActor {
                         original_text: parsed_query.original_text.clone(),
                         limit,
                         replies_received: 0,
-                        expected_replies: state.indexer_shards,
+                        expected_replies,
                         all_vec_results: Vec::new(),
                         all_fts_results: Vec::new(),
                     },
                 );
 
-                let candidate_limit = std::cmp::max(limit * 5, 250);
-                let mut complete = false;
-
-                for i in 0..state.indexer_shards {
-                    let group_name = format!("indexer-shard-{}", i);
-                    if let Some(cell) = ractor::pg::get_members(&group_name).first() {
-                        let indexer_ref: ActorRef<IndexerMessage> = cell.clone().into();
-                        let _ = indexer_ref.cast(IndexerMessage::SearchRequest {
-                            request_id: request_id.clone(),
-                            reply_to: myself.get_name().unwrap(),
-                            query_vector: query_vector.clone(),
-                            fts_query: parsed_query.processed_text.clone(),
-                            site_filter: parsed_query.site_filter.clone(),
-                            limit: candidate_limit,
-                        });
-                    } else {
-                        if let Some(req) = state.pending_requests.get_mut(&request_id) {
-                            req.replies_received += 1;
-                            if req.replies_received >= req.expected_replies {
-                                complete = true;
-                            }
-                        }
-                    }
-                }
-                if complete {
-                    Self::finalize_query(state, request_id);
+                for cell in indexers {
+                    let indexer_ref: ActorRef<IndexerMessage> = cell.into();
+                    let _ = indexer_ref.cast(IndexerMessage::SearchRequest {
+                        request_id: request_id.clone(),
+                        reply_to: myself.get_name().unwrap(),
+                        query_vector: query_vector.clone(),
+                        fts_query: parsed_query.processed_text.clone(),
+                        site_filter: parsed_query.site_filter.clone(),
+                        limit: candidate_limit,
+                    });
                 }
             }
             QueryMessage::Network(QueryNetworkMessage::IndexerReply {
