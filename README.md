@@ -68,7 +68,8 @@ for defaults).
 
 ### 2. Running Locally (Without Docker)
 
-To test the cluster locally without Kubernetes, you will need to start the seed node (Query) first, and then attach the other actors in separate terminals:
+To test the cluster locally without Kubernetes, you will need to start the seed
+node (Query) first, and then attach the other actors in separate terminals:
 
 1. `cargo run --bin query`
 2. `cargo run --bin processor`
