@@ -8,6 +8,7 @@ on:
 
 env:
   RUSTFLAGS: "--cfg tokio_unstable"
+  RUSTC_WRAPPER: ""
 
 jobs:
   build_and_test:
