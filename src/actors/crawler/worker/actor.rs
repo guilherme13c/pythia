@@ -1,7 +1,7 @@
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use rand::seq::IndexedRandom;
 use reqwest::Client;
-use scraper::{Html, Selector};
+use scraper::Selector;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -27,55 +27,119 @@ impl WorkerActor {
     ) {
         debug!("Worker fetching HTML: {}", url);
 
-        let domain = match Url::parse(&url) {
-            Ok(u) => u.host_str().unwrap_or("unknown").to_string(),
-            Err(_) => "unknown".to_string(),
-        };
+        let domain = Url::parse(&url)
+            .map(|u| u.host_str().unwrap_or("unknown").to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
 
         match state.http_client.get(&url).send().await {
             Ok(response) if response.status().is_success() => {
-                let _ = state.primary_manager.cast(ManagerMessage::CrawlSuccess {
-                    domain: domain.clone(),
-                    url: url.clone(),
-                });
+                self.report_success(state, &domain, &url);
 
                 if let Ok(html) = response.text().await {
-                    let num_shards = state.manager_cluster.len();
-                    let (routed_links, raw_text) = extract_links_and_text(&html, &url, num_shards);
-
-                    debug!("Extracted links and text from {}", url);
-
-                    for (shard_idx, urls) in routed_links {
-                        let _ =
-                            state.manager_cluster[shard_idx].cast(ManagerMessage::AddUrls(urls));
-                    }
-
-                    let processor_ref = {
-                        let mut rng = rand::rng();
-                        state.processor_pool.choose(&mut rng).unwrap().clone()
-                    };
-
-                    let _ = processor_ref.cast(ProcessorMessage::ProcessDocument {
-                        url: url.clone(),
-                        raw_text,
-                    });
+                    let (links, text) = Self::extract_content(&html, &url);
+                    self.send_to_processor(url.clone(), text);
+                    self.route_new_links(links);
                 }
             }
             Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                let _ = state
-                    .primary_manager
-                    .cast(ManagerMessage::DomainRateLimited {
-                        domain,
-                        url: url.clone(),
-                    });
+                self.report_rate_limit(state, &domain, &url);
             }
             Ok(response) => warn!("Failed to fetch {} - Status: {}", url, response.status()),
             Err(e) => warn!("Network error fetching {}: {}", url, e),
         }
 
-        let _ = state
-            .primary_manager
-            .cast(ManagerMessage::RequestWork(myself));
+        self.request_more_work(state, myself);
+    }
+
+    fn report_success(&self, state: &WorkerState, domain: &str, url: &str) {
+        let manager_group = format!("manager-shard-{}", state.shard_idx);
+        if let Some(cell) = ractor::pg::get_members(&manager_group).first() {
+            let manager: ActorRef<ManagerMessage> = cell.clone().into();
+            let _ = manager.cast(ManagerMessage::CrawlSuccess(
+                domain.to_string(),
+                url.to_string(),
+            ));
+        }
+    }
+
+    fn report_rate_limit(&self, state: &WorkerState, domain: &str, url: &str) {
+        let manager_group = format!("manager-shard-{}", state.shard_idx);
+        if let Some(cell) = ractor::pg::get_members(&manager_group).first() {
+            let manager: ActorRef<ManagerMessage> = cell.clone().into();
+            let _ = manager.cast(ManagerMessage::DomainRateLimited(
+                domain.to_string(),
+                url.to_string(),
+            ));
+        }
+    }
+
+    fn request_more_work(&self, state: &mut WorkerState, myself: ActorRef<WorkerMessage>) {
+        let manager_group = format!("manager-shard-{}", state.shard_idx);
+        if let Some(cell) = ractor::pg::get_members(&manager_group).first() {
+            let manager: ActorRef<ManagerMessage> = cell.clone().into();
+            let _ = manager.cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        }
+    }
+
+    fn route_new_links(&self, links: Vec<String>) {
+        let mut managers = ractor::pg::get_members(&"crawler_managers".to_string());
+        if managers.is_empty() {
+            return;
+        }
+
+        managers.sort_by_key(|m| {
+            m.get_name()
+                .unwrap_or_default()
+                .split('-')
+                .next_back()
+                .unwrap_or("0")
+                .parse::<usize>()
+                .unwrap_or(0)
+        });
+
+        let mut routed_batches: HashMap<usize, Vec<String>> = HashMap::new();
+
+        for link in links {
+            if let Ok(parsed) = Url::parse(&link) {
+                let domain = parsed.host_str().unwrap_or("unknown");
+                let shard_idx = get_shard_index(domain, managers.len());
+                routed_batches.entry(shard_idx).or_default().push(link);
+            }
+        }
+
+        for (shard_idx, urls) in routed_batches {
+            let manager_ref: ActorRef<ManagerMessage> = managers[shard_idx].clone().into();
+            let _ = manager_ref.cast(ManagerMessage::AddUrls(urls));
+        }
+    }
+
+    fn extract_content(html: &str, base_url_str: &str) -> (Vec<String>, String) {
+        let document = scraper::Html::parse_document(html);
+        let link_selector = get_link_selector();
+        let mut links = Vec::new();
+
+        if let Ok(base_url) = Url::parse(base_url_str) {
+            for element in document.select(link_selector) {
+                if let Some(href) = element.value().attr("href")
+                    && let Ok(mut absolute_url) = base_url.join(href)
+                {
+                    absolute_url.set_fragment(None);
+                    if absolute_url.scheme() == "http" || absolute_url.scheme() == "https" {
+                        links.push(absolute_url.to_string());
+                    }
+                }
+            }
+        }
+        let raw_text = document.root_element().text().collect::<Vec<_>>().join(" ");
+        (links, raw_text)
+    }
+
+    fn send_to_processor(&self, url: String, raw_text: String) {
+        let processors = ractor::pg::get_members(&"processors".to_string());
+        if let Some(cell) = processors.choose(&mut rand::rng()) {
+            let processor_ref: ActorRef<ProcessorMessage> = cell.clone().into();
+            let _ = processor_ref.cast(ProcessorMessage::ProcessDocument(url, raw_text));
+        }
     }
 
     async fn handle_fetch_robots_txt(
@@ -87,66 +151,50 @@ impl WorkerActor {
     ) {
         debug!("Worker fetching robots.txt for: {}", domain);
 
-        let metadata = match state.http_client.get(&url).send().await {
-            Ok(response) if response.status().is_success() => {
-                if let Ok(text) = response.text().await {
-                    info!("Successfully parsed robots.txt for {}", domain);
-                    parse_robots_txt(&text, &domain)
-                } else {
-                    let mut m = DomainMetadata::default_unfetched();
-                    m.rules_fetched = true;
-                    m
-                }
-            }
-            _ => {
-                debug!(
-                    "No robots.txt found for {}, assuming default permissive rules.",
-                    domain
-                );
-                let mut m = DomainMetadata::default_unfetched();
-                m.rules_fetched = true;
-                m
-            }
+        let robots_txt = match state.http_client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => response.text().await.ok(),
+            _ => None,
         };
-
-        let _ = state
-            .primary_manager
-            .cast(ManagerMessage::UpdateDomainRules { domain, metadata });
-        let _ = state
-            .primary_manager
-            .cast(ManagerMessage::RequestWork(myself));
+        let manager_group = format!("manager-shard-{}", state.shard_idx);
+        if let Some(cell) = ractor::pg::get_members(&manager_group).first() {
+            let manager: ActorRef<ManagerMessage> = cell.clone().into();
+            let _ = manager.cast(ManagerMessage::UpdateDomainRules(domain, robots_txt));
+            let _ = manager.cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        }
     }
 }
 
 impl Actor for WorkerActor {
     type Msg = WorkerMessage;
     type State = WorkerState;
-    type Arguments = (
-        Vec<ActorRef<ManagerMessage>>,
-        ActorRef<ManagerMessage>,
-        Vec<ActorRef<ProcessorMessage>>,
-    );
+    type Arguments = usize;
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (manager_cluster, primary_manager, processor_pool): Self::Arguments,
+        shard_idx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Worker Actor starting up...");
 
-        let client = Client::builder()
+        let http_client = Client::builder()
             .user_agent("PythiaSearchBot/1.0 (guilhermesccaporali@protonmail.com)")
             .timeout(Duration::from_secs(3))
             .build()
             .expect("Failed to build HTTP client");
 
-        let _ = primary_manager.cast(ManagerMessage::RequestWork(myself.clone()));
+        let manager_group = format!("manager-shard-{}", shard_idx);
+        let primary_manager = ractor::pg::get_members(&manager_group)
+            .first()
+            .map(|cell| -> ActorRef<ManagerMessage> { cell.clone().into() });
+
+        if let Some(manager_cell) = &primary_manager {
+            let manager_ref: ActorRef<ManagerMessage> = manager_cell.clone();
+            let _ = manager_ref.cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        }
 
         Ok(WorkerState {
-            http_client: client,
-            manager_cluster,
-            primary_manager,
-            processor_pool,
+            http_client,
+            shard_idx,
         })
     }
 
@@ -160,15 +208,18 @@ impl Actor for WorkerActor {
             WorkerMessage::Fetch(url_str) => {
                 self.handle_fetch(state, myself, url_str).await;
             }
-            WorkerMessage::FetchRobotsTxt { domain, url } => {
+            WorkerMessage::FetchRobotsTxt(domain, url) => {
                 self.handle_fetch_robots_txt(state, myself, domain, url)
                     .await;
             }
             WorkerMessage::NoWorkAvailable => {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                let _ = state
-                    .primary_manager
-                    .cast(ManagerMessage::RequestWork(myself));
+                let manager_group = format!("manager-shard-{}", state.shard_idx);
+                let _ = ractor::pg::get_members(&manager_group)
+                    .first()
+                    .map(|cell| -> ActorRef<ManagerMessage> { cell.clone().into() })
+                    .expect("Failed to get primary manager")
+                    .cast(ManagerMessage::RequestWork(myself.get_name().unwrap()));
             }
         }
         Ok(())
@@ -186,40 +237,7 @@ fn get_link_selector() -> &'static Selector {
     SELECTOR.get_or_init(|| Selector::parse("a[href]").expect("Failed to parse CSS selector"))
 }
 
-fn extract_links_and_text(
-    html: &str,
-    base_url_str: &str,
-    num_shards: usize,
-) -> (HashMap<usize, Vec<String>>, String) {
-    let document = Html::parse_document(html);
-    let mut routed_links: HashMap<usize, Vec<String>> = HashMap::new();
-    let link_selector = get_link_selector();
-
-    if let Ok(base_url) = Url::parse(base_url_str) {
-        for element in document.select(link_selector) {
-            if let Some(href) = element.value().attr("href")
-                && let Ok(mut absolute_url) = base_url.join(href)
-            {
-                absolute_url.set_fragment(None);
-
-                if absolute_url.scheme() == "http" || absolute_url.scheme() == "https" {
-                    let target_domain = absolute_url.host_str().unwrap_or("unknown");
-                    let target_shard = get_shard_index(target_domain, num_shards);
-
-                    routed_links
-                        .entry(target_shard)
-                        .or_default()
-                        .push(absolute_url.to_string());
-                }
-            }
-        }
-    }
-
-    let raw_text = document.root_element().text().collect::<Vec<_>>().join(" ");
-    (routed_links, raw_text)
-}
-
-fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
+pub fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
     let mut metadata = DomainMetadata::default_unfetched();
     metadata.rules_fetched = true;
 
@@ -332,7 +350,16 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_links_and_text() {
+    fn test_get_shard_index_determinism() {
+        let domain = "wikipedia.org";
+        let shard1 = get_shard_index(domain, 5);
+        let shard2 = get_shard_index(domain, 5);
+
+        assert_eq!(shard1, shard2);
+    }
+
+    #[test]
+    fn test_extract_content() {
         let html = r#"
             <html>
                 <body>
@@ -346,30 +373,22 @@ mod tests {
         "#;
 
         let base_url = "https://example.com/home";
-        let num_shards = 3;
 
-        let (routed_links, raw_text) = extract_links_and_text(html, base_url, num_shards);
+        let (links, raw_text) = WorkerActor::extract_content(html, base_url);
 
         assert!(raw_text.contains("Hello world!"));
         assert!(raw_text.contains("About Us"));
 
-        let mut all_links = Vec::new();
-        for urls in routed_links.values() {
-            all_links.extend(urls.clone());
-        }
-
-        assert_eq!(all_links.len(), 3);
-        assert!(all_links.contains(&"https://example.com/about".to_string()));
-        assert!(all_links.contains(&"https://other.com/page".to_string()));
-        assert!(all_links.contains(&"https://example.com/faq".to_string()));
-    }
-
-    #[test]
-    fn test_get_shard_index_determinism() {
-        let domain = "wikipedia.org";
-        let shard1 = get_shard_index(domain, 5);
-        let shard2 = get_shard_index(domain, 5);
-
-        assert_eq!(shard1, shard2);
+        assert_eq!(
+            links.len(),
+            3,
+            "Should ignore mailto: links and normalize the rest"
+        );
+        assert!(links.contains(&"https://example.com/about".to_string()));
+        assert!(links.contains(&"https://other.com/page".to_string()));
+        assert!(
+            links.contains(&"https://example.com/faq".to_string()),
+            "Should strip URL fragments"
+        );
     }
 }

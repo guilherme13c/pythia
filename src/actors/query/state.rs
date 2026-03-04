@@ -1,8 +1,20 @@
+use crate::actors::query::messages::SearchResult;
 use fastembed::{TextEmbedding, TextRerank};
-use lancedb::Table;
+use ractor::RpcReplyPort;
+use std::collections::HashMap;
+
+pub struct PendingRequest {
+    pub reply_port: RpcReplyPort<Vec<SearchResult>>,
+    pub original_text: String,
+    pub limit: usize,
+    pub replies_received: usize,
+    pub expected_replies: usize,
+    pub all_vec_results: Vec<SearchResult>,
+    pub all_fts_results: Vec<SearchResult>,
+}
 
 pub struct QueryState {
     pub embedding_model: TextEmbedding,
     pub reranker_model: TextRerank,
-    pub tables: Vec<Table>,
+    pub pending_requests: HashMap<String, PendingRequest>,
 }

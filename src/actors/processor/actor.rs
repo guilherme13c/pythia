@@ -1,7 +1,9 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::hash_map::DefaultHasher;
+use std::env;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use tracing::{debug, error, info};
 use url::Url;
 
@@ -25,6 +27,19 @@ pub fn get_target_shard(url_str: &str, num_shards: usize) -> usize {
 }
 
 impl ProcessorActor {
+    fn get_cache_dir() -> PathBuf {
+        let path = env::var("FASTEMBED_CACHE_PATH")
+            .unwrap_or_else(|_| "/app/models/fastembed".to_string());
+        PathBuf::from(path)
+    }
+
+    fn initialize_model() -> TextEmbedding {
+        TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(Self::get_cache_dir()),
+        )
+        .unwrap()
+    }
+
     fn clean_text(raw_text: &str) -> String {
         raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
@@ -65,13 +80,23 @@ impl ProcessorActor {
                     url
                 );
 
-                let shard_idx = get_target_shard(&url, state.indexer_cluster.len());
+                let mut indexers = ractor::pg::get_members(&"indexers".to_string());
 
-                let _ = state.indexer_cluster[shard_idx].cast(IndexerMessage::StoreChunks {
-                    url,
-                    chunks,
-                    vectors: embeddings,
-                });
+                if !indexers.is_empty() {
+                    indexers.sort_by_key(|m| {
+                        m.get_name()
+                            .unwrap_or_default()
+                            .split('-')
+                            .last()
+                            .unwrap_or("0")
+                            .parse::<usize>()
+                            .unwrap_or(0)
+                    });
+
+                    let shard_idx = get_target_shard(&url, indexers.len());
+                    let indexer_ref: ActorRef<IndexerMessage> = indexers[shard_idx].clone().into();
+                    let _ = indexer_ref.cast(IndexerMessage::StoreChunks(url, chunks, embeddings));
+                }
             }
             Err(e) => {
                 error!("Failed to generate embeddings for {}: {}", url, e);
@@ -83,26 +108,22 @@ impl ProcessorActor {
 impl Actor for ProcessorActor {
     type Msg = ProcessorMessage;
     type State = ProcessorState;
-    type Arguments = Vec<ActorRef<IndexerMessage>>;
+    type Arguments = ();
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
-        indexer_cluster: Self::Arguments,
+        myself: ActorRef<Self::Msg>,
+        _args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        ractor::pg::join("processors".to_string(), vec![myself.clone().into()]);
+
         info!("Processor Actor starting. Loading AI Embedding Model...");
 
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
-        )
-        .expect("Failed to initialize the Embedding Model");
+        let embedding_model = Self::initialize_model();
 
         info!("AI Model loaded successfully!");
 
-        Ok(ProcessorState {
-            embedding_model: model,
-            indexer_cluster,
-        })
+        Ok(ProcessorState { embedding_model })
     }
 
     async fn handle(
@@ -112,7 +133,7 @@ impl Actor for ProcessorActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            ProcessorMessage::ProcessDocument { url, raw_text } => {
+            ProcessorMessage::ProcessDocument(url, raw_text) => {
                 self.handle_process_document(state, url, raw_text);
             }
         }

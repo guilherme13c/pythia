@@ -1,97 +1,36 @@
-use arrow::array::{Float32Array, StringArray};
-use arrow::record_batch::RecordBatch;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding, TextRerank};
-use futures::StreamExt;
-use lance_index::scalar::FullTextSearchQuery;
-use lancedb::query::{ExecutableQuery, QueryBase};
+use fastembed::{EmbeddingModel, InitOptions, RerankInitOptions, TextEmbedding, TextRerank};
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::HashMap;
+use std::env;
+use std::path::PathBuf;
 use tracing::{error, info};
 
-use super::messages::{ParsedQuery, QueryMessage, SearchResult};
+use crate::actors::indexer::messages::IndexerMessage;
+use crate::actors::query::messages::QueryNetworkMessage;
+use crate::actors::query::state::PendingRequest;
+
+use super::messages::{QueryMessage, SearchResult};
 use super::state::QueryState;
 
 pub struct QueryActor;
 
 impl QueryActor {
-    async fn initialize_databases(num_shards: usize) -> Vec<lancedb::Table> {
-        let mut tables = Vec::new();
-
-        for i in 0..num_shards {
-            let db_path = format!("data/pythia-vectors-{}", i);
-            let db = lancedb::connect(&db_path)
-                .execute()
-                .await
-                .expect("Failed to connect to LanceDB");
-
-            let mut retries = 0;
-            let table = loop {
-                match db.open_table("search_index").execute().await {
-                    Ok(t) => break t,
-                    Err(e) => {
-                        if retries > 10 {
-                            panic!("Failed to open table for shard {}: {}", i, e);
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        retries += 1;
-                    }
-                }
-            };
-            tables.push(table);
-        }
-        tables
+    fn get_cache_dir() -> PathBuf {
+        let path = env::var("FASTEMBED_CACHE_PATH")
+            .unwrap_or_else(|_| "/app/models/fastembed".to_string());
+        PathBuf::from(path)
     }
 
     fn initialize_model() -> TextEmbedding {
-        TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
-            .expect("Failed to initialize Embedding Model in Searcher")
+        TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(Self::get_cache_dir()),
+        )
+        .unwrap()
     }
 
     fn initialize_reranker() -> TextRerank {
-        TextRerank::try_new(Default::default()).expect("Failed to initialize Cross-Encoder Model")
-    }
-
-    fn parse_record_batch(batch: &RecordBatch, is_vector: bool) -> Vec<SearchResult> {
-        let mut results = Vec::with_capacity(batch.num_rows());
-
-        let url_array = batch
-            .column_by_name("url")
-            .expect("Missing 'url' column")
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Failed to downcast 'url'");
-
-        let text_array = batch
-            .column_by_name("text")
-            .expect("Missing 'text' column")
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("Failed to downcast 'text'");
-
-        let dist_col = if is_vector {
-            batch.column_by_name("_distance")
-        } else {
-            batch
-                .column_by_name("score")
-                .or_else(|| batch.column_by_name("_score"))
-        };
-
-        let dist_array = dist_col
-            .expect("Missing distance/score column")
-            .as_any()
-            .downcast_ref::<Float32Array>()
-            .expect("Failed to downcast distance/score");
-
-        for i in 0..batch.num_rows() {
-            results.push(SearchResult {
-                url: url_array.value(i).to_string(),
-                text: text_array.value(i).to_string(),
-                distance: dist_array.value(i),
-                snippet: String::new(),
-            });
-        }
-
-        results
+        TextRerank::try_new(RerankInitOptions::default().with_cache_dir(Self::get_cache_dir()))
+            .unwrap()
     }
 
     fn compute_rrf(
@@ -240,140 +179,116 @@ impl QueryActor {
         result
     }
 
-    async fn execute_query(
-        state: &mut QueryState,
-        parsed_query: &ParsedQuery,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>, String> {
-        let candidate_limit = std::cmp::max(limit * 5, 250);
+    fn finalize_query(state: &mut QueryState, request_id: String) {
+        if let Some(req) = state.pending_requests.remove(&request_id) {
+            let candidate_limit = std::cmp::max(req.limit * 5, 250);
+            let candidates =
+                Self::compute_rrf(req.all_vec_results, req.all_fts_results, candidate_limit);
 
-        let embeddings = state
-            .embedding_model
-            .embed(vec![parsed_query.original_text.clone()], None)
-            .map_err(|e| format!("Failed to embed query: {}", e))?;
-
-        let query_vector = &embeddings[0];
-
-        let mut futures = Vec::new();
-        for table in &state.tables {
-            let mut vec_query = table
-                .query()
-                .nearest_to(query_vector.clone())
-                .map_err(|e| format!("Failed to build vector query: {}", e))?;
-
-            if let Some(domain) = &parsed_query.site_filter {
-                let filter_str = format!("url LIKE '%{}%'", domain);
-                vec_query = vec_query.only_if(filter_str);
+            let mut final_results = Self::rerank_candidates(
+                &mut state.reranker_model,
+                &req.original_text,
+                candidates,
+                req.limit,
+            );
+            for result in &mut final_results {
+                result.snippet = Self::generate_snippet(&result.text, &req.original_text);
             }
-            let vec_query = vec_query.limit(candidate_limit);
-
-            let mut fts_query = table.query().full_text_search(FullTextSearchQuery::new(
-                parsed_query.processed_text.clone(),
-            ));
-
-            if let Some(domain) = &parsed_query.site_filter {
-                let filter_str = format!("url LIKE '%{}%'", domain);
-                fts_query = fts_query.only_if(filter_str);
-            }
-            let fts_query = fts_query.limit(candidate_limit);
-
-            futures.push(async move {
-                let mut shard_vec_results = Vec::new();
-                let mut shard_fts_results = Vec::new();
-
-                if let Ok(mut stream) = vec_query.execute().await {
-                    while let Some(Ok(batch)) = stream.next().await {
-                        shard_vec_results.extend(Self::parse_record_batch(&batch, true));
-                    }
-                }
-
-                if !parsed_query.processed_text.is_empty()
-                    && let Ok(mut stream) = fts_query.execute().await
-                {
-                    while let Some(Ok(batch)) = stream.next().await {
-                        shard_fts_results.extend(Self::parse_record_batch(&batch, false));
-                    }
-                }
-
-                Ok::<_, String>((shard_vec_results, shard_fts_results))
-            });
+            let _ = req.reply_port.send(final_results);
         }
-
-        let shard_results = futures::future::join_all(futures).await;
-
-        let mut all_vec_results = Vec::new();
-        let mut all_fts_results = Vec::new();
-
-        for res in shard_results.into_iter().flatten() {
-            all_vec_results.extend(res.0);
-            all_fts_results.extend(res.1);
-        }
-
-        let candidates = Self::compute_rrf(
-            all_vec_results.clone(),
-            all_fts_results.clone(),
-            candidate_limit,
-        );
-
-        let mut final_results = Self::rerank_candidates(
-            &mut state.reranker_model,
-            parsed_query.original_text.as_str(),
-            candidates,
-            limit,
-        );
-
-        for result in &mut final_results {
-            result.snippet = Self::generate_snippet(&result.text, &parsed_query.original_text);
-        }
-
-        Ok(final_results)
     }
 }
 
 impl Actor for QueryActor {
     type Msg = QueryMessage;
     type State = QueryState;
-    type Arguments = usize;
+    type Arguments = ();
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
-        num_shards: Self::Arguments,
+        myself: ActorRef<Self::Msg>,
+        _args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         info!("Starting Searcher Actor...");
 
-        let embedding_model = Self::initialize_model();
-        let reranker_model = Self::initialize_reranker();
-        let tables = Self::initialize_databases(num_shards).await;
+        if let Some(name) = myself.get_name() {
+            ractor::pg::join(name, vec![myself.clone().into()]);
+        }
 
         Ok(QueryState {
-            embedding_model,
-            reranker_model,
-            tables,
+            embedding_model: Self::initialize_model(),
+            reranker_model: Self::initialize_reranker(),
+            pending_requests: HashMap::new(),
         })
     }
 
     async fn handle(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            QueryMessage::Query {
-                parsed_query,
-                limit,
-                reply,
-            } => {
-                let results = match Self::execute_query(state, &parsed_query, limit).await {
-                    Ok(res) => res,
-                    Err(e) => {
-                        error!("{}", e);
-                        vec![]
-                    }
-                };
+            QueryMessage::Query(parsed_query, limit, reply) => {
+                let request_id = uuid::Uuid::new_v4().to_string();
+                let embeddings = state
+                    .embedding_model
+                    .embed(vec![parsed_query.original_text.clone()], None)
+                    .unwrap();
+                let query_vector = embeddings[0].clone();
 
-                let _ = reply.send(results);
+                let candidate_limit = std::cmp::max(limit * 5, 250);
+
+                let indexers = ractor::pg::get_members(&"indexers".to_string());
+                let expected_replies = indexers.len();
+
+                if expected_replies == 0 {
+                    let _ = reply.send(vec![]);
+                    return Ok(());
+                }
+
+                state.pending_requests.insert(
+                    request_id.clone(),
+                    PendingRequest {
+                        reply_port: reply,
+                        original_text: parsed_query.original_text.clone(),
+                        limit,
+                        replies_received: 0,
+                        expected_replies,
+                        all_vec_results: Vec::new(),
+                        all_fts_results: Vec::new(),
+                    },
+                );
+
+                for cell in indexers {
+                    let indexer_ref: ActorRef<IndexerMessage> = cell.into();
+                    let _ = indexer_ref.cast(IndexerMessage::SearchRequest {
+                        request_id: request_id.clone(),
+                        reply_to: myself.get_name().unwrap(),
+                        query_vector: query_vector.clone(),
+                        fts_query: parsed_query.processed_text.clone(),
+                        site_filter: parsed_query.site_filter.clone(),
+                        limit: candidate_limit,
+                    });
+                }
+            }
+            QueryMessage::Network(QueryNetworkMessage::IndexerReply {
+                request_id,
+                shard_vec_results,
+                shard_fts_results,
+            }) => {
+                let mut complete = false;
+                if let Some(req) = state.pending_requests.get_mut(&request_id) {
+                    req.all_vec_results.extend(shard_vec_results);
+                    req.all_fts_results.extend(shard_fts_results);
+                    req.replies_received += 1;
+                    if req.replies_received >= req.expected_replies {
+                        complete = true;
+                    }
+                }
+                if complete {
+                    Self::finalize_query(state, request_id);
+                }
             }
         }
         Ok(())
@@ -383,59 +298,6 @@ impl Actor for QueryActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float32Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use std::sync::Arc;
-
-    #[test]
-    fn test_parse_record_batch_vector_distance() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("url", DataType::Utf8, false),
-            Field::new("text", DataType::Utf8, false),
-            Field::new("_distance", DataType::Float32, false),
-        ]));
-
-        let url_array = Arc::new(StringArray::from(vec!["https://rust-lang.org"]));
-        let text_array = Arc::new(StringArray::from(vec!["Rust is fast"]));
-        let dist_array = Arc::new(Float32Array::from(vec![0.15]));
-
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![url_array as _, text_array as _, dist_array as _],
-        )
-        .unwrap();
-
-        let results = QueryActor::parse_record_batch(&batch, true);
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].url, "https://rust-lang.org");
-        assert_eq!(results[0].distance, 0.15);
-    }
-
-    #[test]
-    fn test_parse_record_batch_fts_score() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("url", DataType::Utf8, false),
-            Field::new("text", DataType::Utf8, false),
-            Field::new("score", DataType::Float32, false),
-        ]));
-
-        let url_array = Arc::new(StringArray::from(vec!["https://lancedb.com"]));
-        let text_array = Arc::new(StringArray::from(vec!["LanceDB FTS text"]));
-        let score_array = Arc::new(Float32Array::from(vec![12.5]));
-
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![url_array as _, text_array as _, score_array as _],
-        )
-        .unwrap();
-
-        let results = QueryActor::parse_record_batch(&batch, false);
-
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].url, "https://lancedb.com");
-        assert_eq!(results[0].distance, 12.5);
-    }
 
     #[test]
     fn test_compute_rrf_boosts_common_results() {

@@ -1,20 +1,20 @@
-use super::state::DomainMetadata;
-use crate::actors::crawler::worker::messages::WorkerMessage;
-use ractor::ActorRef;
+use ractor::BytesConvertable;
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ManagerMessage {
     AddUrls(Vec<String>),
-    RequestWork(ActorRef<WorkerMessage>),
-    UpdateDomainRules {
-        domain: String,
-        metadata: DomainMetadata,
-    },
-    DomainRateLimited {
-        domain: String,
-        url: String,
-    },
-    CrawlSuccess {
-        domain: String,
-        url: String,
-    },
+    RequestWork(String),
+    UpdateDomainRules(String, Option<String>),
+    DomainRateLimited(String, String),
+    CrawlSuccess(String, String),
+}
+
+impl BytesConvertable for ManagerMessage {
+    fn into_bytes(self) -> Vec<u8> {
+        serde_json::to_vec(&self).unwrap()
+    }
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        serde_json::from_slice(&bytes).unwrap()
+    }
 }

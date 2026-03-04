@@ -1,11 +1,11 @@
-use ractor::RpcReplyPort;
+use ractor::{BytesConvertable, RpcReplyPort};
 use rust_stemmers::{Algorithm, Stemmer};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use stop_words::{LANGUAGE, get};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SearchResult {
     pub url: String,
     pub text: String,
@@ -13,12 +13,38 @@ pub struct SearchResult {
     pub snippet: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ParsedQuery {
     pub original_text: String,
     pub processed_text: String,
     pub site_filter: Option<String>,
     pub language: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum QueryNetworkMessage {
+    IndexerReply {
+        request_id: String,
+        shard_vec_results: Vec<SearchResult>,
+        shard_fts_results: Vec<SearchResult>,
+    },
+}
+
+pub enum QueryMessage {
+    Query(ParsedQuery, usize, RpcReplyPort<Vec<SearchResult>>),
+    Network(QueryNetworkMessage),
+}
+
+impl BytesConvertable for QueryMessage {
+    fn into_bytes(self) -> Vec<u8> {
+        match self {
+            QueryMessage::Query(..) => panic!("Local Query cannot cross network boundary"),
+            QueryMessage::Network(n) => serde_json::to_vec(&n).unwrap(),
+        }
+    }
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        QueryMessage::Network(serde_json::from_slice(&bytes).unwrap())
+    }
 }
 
 fn get_cached_stop_words(lang_code: &str) -> &'static HashSet<String> {
@@ -89,12 +115,4 @@ impl ParsedQuery {
             language: lang_code.to_string(),
         }
     }
-}
-
-pub enum QueryMessage {
-    Query {
-        parsed_query: ParsedQuery,
-        limit: usize,
-        reply: RpcReplyPort<Vec<SearchResult>>,
-    },
 }

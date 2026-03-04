@@ -8,6 +8,7 @@ pub mod models;
 
 pub fn build_router(query_pool: Vec<ActorRef<QueryMessage>>) -> Router {
     Router::new()
+        .route("/health", get(handlers::health_handler))
         .route("/search", get(handlers::search_handler))
         .with_state(query_pool)
 }
@@ -47,11 +48,7 @@ mod tests {
             _state: &mut Self::State,
         ) -> Result<(), ActorProcessingErr> {
             match message {
-                QueryMessage::Query {
-                    parsed_query,
-                    limit: _,
-                    reply,
-                } => {
+                QueryMessage::Query(parsed_query, _limit, reply) => {
                     let _ = reply.send(vec![SearchResult {
                         url: "https://test.com".to_string(),
                         text: format!("Found: {}", parsed_query.original_text),
@@ -59,6 +56,7 @@ mod tests {
                         snippet: "<b>Rust</b> is awesome".to_string(),
                     }]);
                 }
+                QueryMessage::Network(_) => {}
             }
             Ok(())
         }
