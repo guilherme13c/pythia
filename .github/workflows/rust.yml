@@ -1,30 +1,27 @@
-name: Rust
+name: Rust CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
 
 env:
-  CARGO_TERM_COLOR: always
-  RUSTC_WRAPPER: "sccache"
-  SCCACHE_GHA_ENABLED: "true"
+  RUSTFLAGS: "--cfg tokio_unstable"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build_and_test:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install protobuf-compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler pkg-config libssl-dev build-essential
 
-      - name: Run sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-
-      - name: Cache Cargo Registry
+      - name: Setup Rust Cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build
