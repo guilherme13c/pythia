@@ -1,17 +1,28 @@
 # Pythia
 
 <!--toc:start-->
-
 - [Pythia](#pythia)
   - [Tech Stack](#tech-stack)
   - [How it works](#how-it-works)
   - [Getting Started](#getting-started)
     - [1. Clone and setup](#1-clone-and-setup)
-    - [2. Run it](#2-run-it)
-    - [3. Search](#3-search)
+    - [2. Running Locally](#2-running-locally)
+    - [3. Build the Docker Image](#3-build-the-docker-image)
+    - [4. Deploy to Kubernetes](#4-deploy-to-kubernetes)
+    - [5. Search](#5-search)
+    - [6. Scaling](#6-scaling)
   - [Contributing](#contributing)
-  - [Development](#development) - [Running Tests](#running-tests) - [Benchmarking](#benchmarking) - [Profiling](#profiling) - [Async Profiling (Tokio Console)](#async-profiling-tokio-console) - [Install the console tool](#install-the-console-tool) - [Run Pythia in profiling mode](#run-pythia-in-profiling-mode) - [Connect the console](#connect-the-console) - [CPU Profiling (Flamegraphs)](#cpu-profiling-flamegraphs) - [Performance Configuration](#performance-configuration)
-  <!--toc:end-->
+  - [Development](#development)
+    - [Running Tests](#running-tests)
+    - [Benchmarking](#benchmarking)
+    - [Profiling](#profiling)
+    - [Async Profiling (Tokio Console)](#async-profiling-tokio-console)
+      - [Install the console tool](#install-the-console-tool)
+      - [Run Pythia in profiling mode](#run-pythia-in-profiling-mode)
+      - [Connect the console](#connect-the-console)
+      - [CPU Profiling (Flamegraphs)](#cpu-profiling-flamegraphs)
+    - [Performance Configuration](#performance-configuration)
+<!--toc:end-->
 
 A distributed, Kubernetes-native search engine and web crawler written in Rust.
 
@@ -49,7 +60,7 @@ The architecture relies on message passing between a few specific actors:
 You'll need a recent Rust toolchain and the protobuf compiler
 (`sudo apt install protobuf-compiler` or `brew install protobuf` for LanceDB).
 
-### 1. Clone and setup
+### 1. Clone and Setup
 
 ```bash
 git clone https://github.com/guilherme13c/pythia.git
@@ -66,7 +77,7 @@ https://rust-lang.org/
 You can optionally create a .env file to tweak settings (see `src/config.rs`
 for defaults).
 
-### 2. Running Locally (Without Docker)
+### 2. Running Locally
 
 To test the cluster locally without Kubernetes, you will need to start the seed
 node (Query) first, and then attach the other actors in separate terminals:
@@ -76,19 +87,19 @@ node (Query) first, and then attach the other actors in separate terminals:
 3. `cargo run --bin indexer`
 4. `cargo run --bin crawler`
 
-### 2. Build the Docker Image
+### 3. Build the Docker Image
 
 Pythia uses a multi-stage Docker build to cache Rust dependencies and
 pre-download the ML models.
 
 ```bash
-docker build -t pythia:v3 .
+docker build -t pythia:v1 .
 ```
 
 **Note:** If you are using local Kubernetes like Minikube or Kind, make sure to
 load the image into your cluster (e.g., minikube image load pythia:v1).
 
-### 3. Deploy to Kubernetes
+### 4. Deploy to Kubernetes
 
 Spin up the entire cluster (Query API, Processors, Indexers, and Crawlers)
 using the provided manifest:
@@ -103,7 +114,7 @@ You can watch the actors discover each other and boot up:
 kubectl get pods -w
 ```
 
-### 4. Search
+### 5. Search
 
 Once the `query` pod is running, map its port to your local machine:
 
@@ -117,7 +128,7 @@ Now you can query your search engine!
 curl "http://127.0.0.1:3000/search?q=What+is+Rust&limit=5"
 ```
 
-### 5. Scaling
+### 6. Scaling
 
 Want to crawl or process data faster? Just open `pythia-cluster.yaml`, change
 the replicas count for the crawler, indexer, or processor, and run `kubectl
