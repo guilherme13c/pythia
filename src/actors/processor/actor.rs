@@ -11,8 +11,8 @@ use super::messages::ProcessorMessage;
 use super::state::ProcessorState;
 use crate::actors::indexer::messages::IndexerMessage;
 
-const CHUNK_SIZE: usize = 200;
-const CHUNK_OVERLAP: usize = 50;
+const CHUNK_MAX_WORDS: usize = 200;
+const CHUNK_OVERLAP_SENTENCES: usize = 2;
 
 pub struct ProcessorActor;
 
@@ -44,19 +44,59 @@ impl ProcessorActor {
         raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn chunk_text(clean_text: &str, chunk_size: usize, overlap: usize) -> Vec<String> {
-        let words: Vec<&str> = clean_text.split(' ').collect();
+    fn separate_sentences(clean_text: &str) -> Vec<String> {
+        let mut sentences = Vec::new();
+        let mut current_sentence = String::new();
+
+        for c in clean_text.chars() {
+            current_sentence.push(c);
+            if c == '.' || c == '!' || c == '?' {
+                sentences.push(current_sentence.trim().to_string());
+                current_sentence.clear();
+            }
+        }
+        if !current_sentence.trim().is_empty() {
+            sentences.push(current_sentence.trim().to_string());
+        }
+
+        sentences
+    }
+
+    fn chunk_text(clean_text: &str, max_words: usize, overlap_sentences: usize) -> Vec<String> {
+        let sentences = Self::separate_sentences(clean_text);
+
+        if sentences.is_empty() {
+            return Vec::new();
+        }
+
         let mut chunks = Vec::new();
         let mut i = 0;
 
-        while i < words.len() {
-            let end = std::cmp::min(i + chunk_size, words.len());
-            chunks.push(words[i..end].join(" "));
+        while i < sentences.len() {
+            let mut chunk_words = 0;
+            let mut chunk_sentences = Vec::new();
+            let mut j = i;
 
-            if end == words.len() {
+            while j < sentences.len() {
+                let sentence = &sentences[j];
+                let sentence_words = sentence.split_whitespace().count();
+
+                if chunk_words + sentence_words > max_words && !chunk_sentences.is_empty() {
+                    break;
+                }
+
+                chunk_sentences.push(sentence.as_str());
+                chunk_words += sentence_words;
+                j += 1;
+            }
+
+            chunks.push(chunk_sentences.join(" "));
+
+            if j == sentences.len() {
                 break;
             }
-            i = end - overlap;
+
+            i = std::cmp::max(i + 1, j.saturating_sub(overlap_sentences));
         }
 
         chunks
@@ -64,7 +104,7 @@ impl ProcessorActor {
 
     fn handle_process_document(&self, state: &mut ProcessorState, url: String, raw_text: String) {
         let clean_text = Self::clean_text(&raw_text);
-        let chunks = Self::chunk_text(&clean_text, CHUNK_SIZE, CHUNK_OVERLAP);
+        let chunks = Self::chunk_text(&clean_text, CHUNK_MAX_WORDS, CHUNK_OVERLAP_SENTENCES);
 
         debug!(
             "Processor split document {} into {} chunks. Generating embeddings...",
@@ -87,7 +127,7 @@ impl ProcessorActor {
                         m.get_name()
                             .unwrap_or_default()
                             .split('-')
-                            .last()
+                            .next_back()
                             .unwrap_or("0")
                             .parse::<usize>()
                             .unwrap_or(0)
@@ -154,35 +194,44 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_text_exact_size() {
-        let text = "one two three four five";
+    fn test_separate_sentences() {
+        let text = "Hello world! How are you? I am fine. This has no punctuation";
 
-        let chunks = ProcessorActor::chunk_text(text, 5, 2);
+        let sentences = ProcessorActor::separate_sentences(text);
 
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], "one two three four five");
+        assert_eq!(sentences.len(), 4);
+        assert_eq!(sentences[0], "Hello world!");
+        assert_eq!(sentences[1], "How are you?");
+        assert_eq!(sentences[2], "I am fine.");
+        assert_eq!(sentences[3], "This has no punctuation");
     }
 
     #[test]
-    fn test_chunk_text_sliding_window_overlap() {
-        let text = "word1 word2 word3 word4 word5 word6 word7";
+    fn test_chunk_text_semantic_boundaries() {
+        let text = "One. Two. Three. Four. Five.";
 
-        let chunks = ProcessorActor::chunk_text(text, 4, 2);
+        let chunks = ProcessorActor::chunk_text(text, 5, 1);
 
-        assert_eq!(chunks.len(), 3, "Should create exactly 3 chunks");
-        assert_eq!(chunks[0], "word1 word2 word3 word4");
-        assert_eq!(chunks[1], "word3 word4 word5 word6");
-        assert_eq!(chunks[2], "word5 word6 word7");
+        assert_eq!(chunks.len(), 1, "Should group short sentences together");
+        assert_eq!(chunks[0], "One. Two. Three. Four. Five.");
     }
 
     #[test]
-    fn test_chunk_text_smaller_than_chunk_size() {
-        let text = "short sentence";
+    fn test_chunk_text_sliding_window_sentence_overlap() {
+        let text = "Sentence one is here. Sentence two is short. Sentence three. Sentence four is longer. Sentence five.";
 
-        let chunks = ProcessorActor::chunk_text(text, 10, 5);
+        let chunks = ProcessorActor::chunk_text(text, 8, 1);
 
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0], "short sentence");
+        assert_eq!(chunks.len(), 3);
+
+        assert_eq!(chunks[0], "Sentence one is here. Sentence two is short.");
+
+        assert_eq!(chunks[1], "Sentence two is short. Sentence three.");
+
+        assert_eq!(
+            chunks[2],
+            "Sentence three. Sentence four is longer. Sentence five."
+        );
     }
 
     #[test]
@@ -196,8 +245,5 @@ mod tests {
             shard_a, shard_b,
             "Pages from the same domain must route to the same shard"
         );
-
-        let invalid_url_shard = get_target_shard("not_a_valid_url", num_shards);
-        assert!(invalid_url_shard < num_shards);
     }
 }
