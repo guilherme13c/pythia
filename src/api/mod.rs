@@ -66,6 +66,8 @@ mod tests {
                     let _ = reply.send(vec![SearchResult {
                         url: "https://test.com".to_string(),
                         text: format!("Found: {}", parsed_query.original_text),
+                        title: None,
+                        description: None,
                         distance: 0.99,
                         snippet: "<b>Rust</b> is awesome".to_string(),
                     }]);

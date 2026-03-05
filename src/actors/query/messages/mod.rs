@@ -8,6 +8,8 @@ use stop_words::{LANGUAGE, get};
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SearchResult {
     pub url: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
     pub text: String,
     pub distance: f32,
     pub snippet: String,

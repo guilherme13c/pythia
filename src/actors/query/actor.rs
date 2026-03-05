@@ -5,7 +5,7 @@ use std::env;
 use std::path::PathBuf;
 use tracing::{error, info};
 
-use crate::actors::indexer::messages::IndexerMessage;
+use crate::actors::indexer::messages::{IndexerMessage, SearchRequestPayload};
 use crate::actors::query::messages::QueryNetworkMessage;
 use crate::actors::query::state::PendingRequest;
 
@@ -53,27 +53,27 @@ impl QueryActor {
         });
 
         let k = 60.0;
-        let mut rrf_scores: HashMap<(String, String), f32> = HashMap::new();
+        let mut rrf_scores: HashMap<(String, String), (f32, SearchResult)> = HashMap::new();
 
         for (rank, res) in vec_results.into_iter().enumerate() {
-            let key = (res.url, res.text);
+            let key = (res.url.clone(), res.text.clone());
             let score = 1.0 / (k + (rank as f32) + 1.0);
-            *rrf_scores.entry(key).or_insert(0.0) += score;
+            let entry = rrf_scores.entry(key).or_insert((0.0, res));
+            entry.0 += score;
         }
 
         for (rank, res) in fts_results.into_iter().enumerate() {
-            let key = (res.url, res.text);
+            let key = (res.url.clone(), res.text.clone());
             let score = 1.0 / (k + (rank as f32) + 1.0);
-            *rrf_scores.entry(key).or_insert(0.0) += score;
+            let entry = rrf_scores.entry(key).or_insert((0.0, res));
+            entry.0 += score;
         }
 
         let mut final_results: Vec<SearchResult> = rrf_scores
             .into_iter()
-            .map(|((url, text), combined_score)| SearchResult {
-                url,
-                text,
-                distance: combined_score,
-                snippet: String::new(),
+            .map(|(_, (combined_score, mut res))| {
+                res.distance = combined_score;
+                res
             })
             .collect();
 
@@ -272,14 +272,14 @@ impl Actor for QueryActor {
 
                 for cell in indexers {
                     let indexer_ref: ActorRef<IndexerMessage> = cell.into();
-                    let _ = indexer_ref.cast(IndexerMessage::SearchRequest {
+                    let _ = indexer_ref.cast(IndexerMessage::SearchRequest(SearchRequestPayload {
                         request_id: request_id.clone(),
                         reply_to: myself.get_name().unwrap(),
                         query_vector: query_vector.clone(),
                         fts_query: parsed_query.processed_text.clone(),
                         site_filter: parsed_query.site_filter.clone(),
                         limit: candidate_limit,
-                    });
+                    }));
                 }
             }
             QueryMessage::Network(QueryNetworkMessage::IndexerReply {
@@ -315,12 +315,16 @@ mod tests {
             SearchResult {
                 url: "https://doc-a.com".to_string(),
                 text: "Text A".to_string(),
+                title: None,
+                description: None,
                 distance: 0.1,
                 snippet: String::new(),
             },
             SearchResult {
                 url: "https://doc-b.com".to_string(),
                 text: "Text B".to_string(),
+                title: None,
+                description: None,
                 distance: 0.3,
                 snippet: String::new(),
             },
@@ -330,12 +334,16 @@ mod tests {
             SearchResult {
                 url: "https://doc-b.com".to_string(),
                 text: "Text B".to_string(),
+                title: None,
+                description: None,
                 distance: 15.0,
                 snippet: String::new(),
             },
             SearchResult {
                 url: "https://doc-c.com".to_string(),
                 text: "Text C".to_string(),
+                title: None,
+                description: None,
                 distance: 5.0,
                 snippet: String::new(),
             },
@@ -365,6 +373,8 @@ mod tests {
             url: "https://auto-repair.com".to_string(),
             text: "I have so much rust on my old car. The rust is eating through the metal."
                 .to_string(),
+            title: None,
+            description: None,
             distance: 10.0,
             snippet: String::new(),
         };
@@ -373,6 +383,8 @@ mod tests {
             url: "https://rust-lang.org".to_string(),
             text: "Rust is a blazingly fast and memory-safe systems programming language."
                 .to_string(),
+            title: None,
+            description: None,
             distance: 5.0,
             snippet: String::new(),
         };
