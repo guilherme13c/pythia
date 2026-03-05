@@ -48,7 +48,7 @@ mod tests {
             _state: &mut Self::State,
         ) -> Result<(), ActorProcessingErr> {
             match message {
-                QueryMessage::Query(parsed_query, _limit, reply) => {
+                QueryMessage::Query(parsed_query, _limit, _offset, reply) => {
                     let _ = reply.send(vec![SearchResult {
                         url: "https://test.com".to_string(),
                         text: format!("Found: {}", parsed_query.original_text),
