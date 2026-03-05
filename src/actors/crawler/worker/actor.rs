@@ -36,8 +36,8 @@ impl WorkerActor {
                 self.report_success(state, &domain, &url);
 
                 if let Ok(html) = response.text().await {
-                    let (links, text) = Self::extract_content(&html, &url);
-                    self.send_to_processor(url.clone(), text);
+                    let (links, text, title, description) = Self::extract_content(&html, &url);
+                    self.send_to_processor(url.clone(), text, title, description);
                     self.route_new_links(links);
                 }
             }
@@ -113,7 +113,10 @@ impl WorkerActor {
         }
     }
 
-    fn extract_content(html: &str, base_url_str: &str) -> (Vec<String>, String) {
+    fn extract_content(
+        html: &str,
+        base_url_str: &str,
+    ) -> (Vec<String>, String, Option<String>, Option<String>) {
         let document = scraper::Html::parse_document(html);
         let link_selector = get_link_selector();
         let mut links = Vec::new();
@@ -130,15 +133,41 @@ impl WorkerActor {
                 }
             }
         }
+
         let raw_text = document.root_element().text().collect::<Vec<_>>().join(" ");
-        (links, raw_text)
+
+        let title = document
+            .select(&Selector::parse("title").unwrap())
+            .next()
+            .map(|t| t.inner_html().trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        let description = document
+            .select(&Selector::parse("meta[name=\"description\"]").unwrap())
+            .next()
+            .and_then(|m| m.value().attr("content"))
+            .map(|c| c.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        (links, raw_text, title, description)
     }
 
-    fn send_to_processor(&self, url: String, raw_text: String) {
+    fn send_to_processor(
+        &self,
+        url: String,
+        raw_text: String,
+        title: Option<String>,
+        description: Option<String>,
+    ) {
         let processors = ractor::pg::get_members(&"processors".to_string());
         if let Some(cell) = processors.choose(&mut rand::rng()) {
             let processor_ref: ActorRef<ProcessorMessage> = cell.clone().into();
-            let _ = processor_ref.cast(ProcessorMessage::ProcessDocument(url, raw_text));
+            let _ = processor_ref.cast(ProcessorMessage::ProcessDocument(
+                url,
+                raw_text,
+                title,
+                description,
+            ));
         }
     }
 
@@ -269,10 +298,8 @@ pub fn parse_robots_txt(text: &str, domain: &str) -> DomainMetadata {
                     metadata.crawl_delay = Duration::from_secs(2);
                     found_specific_bot = true;
                 }
-            } else if agent == "*" {
-                if !found_specific_bot {
-                    in_target_user_agent = true;
-                }
+            } else if agent == "*" && !found_specific_bot {
+                in_target_user_agent = true;
             }
             continue;
         }
@@ -362,6 +389,10 @@ mod tests {
     fn test_extract_content() {
         let html = r#"
             <html>
+                <head>
+                    <title>My Awesome Page</title>
+                    <meta name="description" content="This is a test description for the page.">
+                </head>
                 <body>
                     <p>Hello world!</p>
                     <a href="/about">About Us</a>
@@ -374,7 +405,13 @@ mod tests {
 
         let base_url = "https://example.com/home";
 
-        let (links, raw_text) = WorkerActor::extract_content(html, base_url);
+        let (links, raw_text, title, description) = WorkerActor::extract_content(html, base_url);
+
+        assert_eq!(title, Some("My Awesome Page".to_string()));
+        assert_eq!(
+            description,
+            Some("This is a test description for the page.".to_string())
+        );
 
         assert!(raw_text.contains("Hello world!"));
         assert!(raw_text.contains("About Us"));

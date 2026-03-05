@@ -50,27 +50,39 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::array::{Float32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use pythia::actors::indexer::actor::IndexerActor;
     use std::sync::Arc;
 
     #[test]
     fn test_parse_record_batch_vector_distance() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("url", DataType::Utf8, false),
+            Field::new("title", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
             Field::new("text", DataType::Utf8, false),
             Field::new("_distance", DataType::Float32, false),
         ]));
 
         let url_array = Arc::new(StringArray::from(vec!["https://rust-lang.org"]));
+        let title_array = Arc::new(StringArray::from(vec![Some("Rust Programming Language")]));
+        let desc_array = Arc::new(StringArray::from(vec![Some(
+            "A language empowering everyone...",
+        )]));
         let text_array = Arc::new(StringArray::from(vec!["Rust is fast"]));
         let dist_array = Arc::new(Float32Array::from(vec![0.15]));
 
         let batch = RecordBatch::try_new(
             schema,
-            vec![url_array as _, text_array as _, dist_array as _],
+            vec![
+                url_array as _,
+                title_array as _,
+                desc_array as _,
+                text_array as _,
+                dist_array as _,
+            ],
         )
         .unwrap();
 
@@ -78,6 +90,10 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].url, "https://rust-lang.org");
+        assert_eq!(
+            results[0].title.as_deref(),
+            Some("Rust Programming Language")
+        );
         assert_eq!(results[0].distance, 0.15);
     }
 
@@ -85,17 +101,27 @@ mod tests {
     fn test_parse_record_batch_fts_score() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("url", DataType::Utf8, false),
+            Field::new("title", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
             Field::new("text", DataType::Utf8, false),
             Field::new("score", DataType::Float32, false),
         ]));
 
         let url_array = Arc::new(StringArray::from(vec!["https://lancedb.com"]));
+        let title_array = Arc::new(StringArray::from(vec![Option::<&str>::None]));
+        let desc_array = Arc::new(StringArray::from(vec![Option::<&str>::None]));
         let text_array = Arc::new(StringArray::from(vec!["LanceDB FTS text"]));
         let score_array = Arc::new(Float32Array::from(vec![12.5]));
 
         let batch = RecordBatch::try_new(
             schema,
-            vec![url_array as _, text_array as _, score_array as _],
+            vec![
+                url_array as _,
+                title_array as _,
+                desc_array as _,
+                text_array as _,
+                score_array as _,
+            ],
         )
         .unwrap();
 
@@ -103,6 +129,7 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].url, "https://lancedb.com");
+        assert_eq!(results[0].title, None);
         assert_eq!(results[0].distance, 12.5);
     }
 }

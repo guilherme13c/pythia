@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ProcessorMessage {
-    ProcessDocument(String, String),
+    ProcessDocument(String, String, Option<String>, Option<String>),
 }
 
 impl BytesConvertable for ProcessorMessage {

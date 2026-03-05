@@ -1,3 +1,4 @@
+use arrow::array::Array;
 use arrow::array::{FixedSizeListArray, Float32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::{RecordBatch, RecordBatchIterator};
@@ -10,7 +11,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::Arc;
 use tracing::{error, info};
 
-use super::messages::IndexerMessage;
+use super::messages::{IndexerMessage, SearchRequestPayload};
 use super::state::IndexerState;
 use crate::actors::query::messages::{QueryMessage, QueryNetworkMessage, SearchResult};
 
@@ -20,6 +21,8 @@ impl IndexerActor {
     fn get_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
             Field::new("url", DataType::Utf8, false),
+            Field::new("title", DataType::Utf8, true),
+            Field::new("description", DataType::Utf8, true),
             Field::new("text", DataType::Utf8, false),
             Field::new(
                 "vector",
@@ -66,12 +69,16 @@ impl IndexerActor {
     fn build_record_batch(
         schema: Arc<Schema>,
         url: &str,
+        title: Option<String>,
+        description: Option<String>,
         chunks: Vec<String>,
         vectors: Vec<Vec<f32>>,
     ) -> Result<RecordBatch, arrow::error::ArrowError> {
         let num_rows = chunks.len();
 
         let url_array = Arc::new(StringArray::from(vec![url; num_rows]));
+        let title_array = Arc::new(StringArray::from(vec![title.as_deref(); num_rows]));
+        let desc_array = Arc::new(StringArray::from(vec![description.as_deref(); num_rows]));
         let text_array = Arc::new(StringArray::from(chunks));
 
         let vector_lists: Vec<Option<Vec<Option<f32>>>> = vectors
@@ -83,13 +90,24 @@ impl IndexerActor {
             FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(vector_lists, 384),
         );
 
-        RecordBatch::try_new(schema, vec![url_array, text_array, vector_array])
+        RecordBatch::try_new(
+            schema,
+            vec![
+                url_array as _,
+                title_array as _,
+                desc_array as _,
+                text_array as _,
+                vector_array as _,
+            ],
+        )
     }
 
     async fn handle_store_chunks(
         &self,
         state: &mut IndexerState,
         url: String,
+        title: Option<String>,
+        description: Option<String>,
         chunks: Vec<String>,
         vectors: Vec<Vec<f32>>,
     ) {
@@ -100,7 +118,14 @@ impl IndexerActor {
 
         let schema = state.table.schema().await.unwrap();
 
-        let batch = match Self::build_record_batch(schema.clone(), &url, chunks, vectors) {
+        let batch = match Self::build_record_batch(
+            schema.clone(),
+            &url,
+            title,
+            description,
+            chunks,
+            vectors,
+        ) {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to build Arrow RecordBatch for {}: {}", url, e);
@@ -126,6 +151,21 @@ impl IndexerActor {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
+
+        let title_array = batch
+            .column_by_name("title")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        let desc_array = batch
+            .column_by_name("description")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
         let text_array = batch
             .column_by_name("text")
             .unwrap()
@@ -150,6 +190,16 @@ impl IndexerActor {
             results.push(SearchResult {
                 url: url_array.value(i).to_string(),
                 text: text_array.value(i).to_string(),
+                title: if title_array.is_null(i) {
+                    None
+                } else {
+                    Some(title_array.value(i).to_string())
+                },
+                description: if desc_array.is_null(i) {
+                    None
+                } else {
+                    Some(desc_array.value(i).to_string())
+                },
                 distance: dist_array.value(i),
                 snippet: String::new(),
             });
@@ -157,54 +207,47 @@ impl IndexerActor {
         results
     }
 
-    async fn handle_search_request(
-        &self,
-        state: &mut IndexerState,
-        request_id: String,
-        reply_to: String,
-        query_vector: Vec<f32>,
-        fts_query: String,
-        site_filter: Option<String>,
-        limit: usize,
-    ) {
+    async fn handle_search_request(&self, state: &mut IndexerState, req: SearchRequestPayload) {
         let mut shard_vec_results = Vec::new();
         let mut shard_fts_results = Vec::new();
 
         let mut vec_query = state
             .table
             .query()
-            .nearest_to(query_vector.clone())
+            .nearest_to(req.query_vector.clone())
             .unwrap();
-        if let Some(domain) = &site_filter {
+
+        if let Some(domain) = &req.site_filter {
             vec_query = vec_query.only_if(format!("url LIKE '%{}%'", domain));
         }
 
-        if let Ok(mut stream) = vec_query.limit(limit).execute().await {
+        if let Ok(mut stream) = vec_query.limit(req.limit).execute().await {
             while let Some(Ok(batch)) = stream.next().await {
                 shard_vec_results.extend(Self::parse_record_batch(&batch, true));
             }
         }
 
-        if !fts_query.is_empty() {
+        if !req.fts_query.is_empty() {
             let mut fts_q = state
                 .table
                 .query()
-                .full_text_search(FullTextSearchQuery::new(fts_query));
-            if let Some(domain) = &site_filter {
+                .full_text_search(FullTextSearchQuery::new(req.fts_query));
+
+            if let Some(domain) = &req.site_filter {
                 fts_q = fts_q.only_if(format!("url LIKE '%{}%'", domain));
             }
 
-            if let Ok(mut stream) = fts_q.limit(limit).execute().await {
+            if let Ok(mut stream) = fts_q.limit(req.limit).execute().await {
                 while let Some(Ok(batch)) = stream.next().await {
                     shard_fts_results.extend(Self::parse_record_batch(&batch, false));
                 }
             }
         }
 
-        if let Some(cell) = ractor::pg::get_members(&reply_to).first() {
+        if let Some(cell) = ractor::pg::get_members(&req.reply_to).first() {
             let query_actor: ActorRef<QueryMessage> = cell.clone().into();
             let msg = QueryNetworkMessage::IndexerReply {
-                request_id,
+                request_id: req.request_id,
                 shard_vec_results,
                 shard_fts_results,
             };
@@ -212,7 +255,7 @@ impl IndexerActor {
         } else {
             error!(
                 "Could not find query actor on the network to reply to: {}",
-                reply_to
+                req.reply_to
             );
         }
     }
@@ -242,28 +285,13 @@ impl Actor for IndexerActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            IndexerMessage::StoreChunks(url, chunks, vectors) => {
-                self.handle_store_chunks(state, url, chunks, vectors).await;
+            IndexerMessage::StoreChunks(url, title, description, chunks, vectors) => {
+                self.handle_store_chunks(state, url, title, description, chunks, vectors)
+                    .await;
             }
 
-            IndexerMessage::SearchRequest {
-                request_id,
-                reply_to,
-                query_vector,
-                fts_query,
-                site_filter,
-                limit,
-            } => {
-                self.handle_search_request(
-                    state,
-                    request_id,
-                    reply_to,
-                    query_vector,
-                    fts_query,
-                    site_filter,
-                    limit,
-                )
-                .await;
+            IndexerMessage::SearchRequest(req) => {
+                self.handle_search_request(state, req).await;
             }
         }
         Ok(())

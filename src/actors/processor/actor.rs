@@ -102,7 +102,14 @@ impl ProcessorActor {
         chunks
     }
 
-    fn handle_process_document(&self, state: &mut ProcessorState, url: String, raw_text: String) {
+    fn handle_process_document(
+        &self,
+        state: &mut ProcessorState,
+        url: String,
+        raw_text: String,
+        title: Option<String>,
+        descrition: Option<String>,
+    ) {
         let clean_text = Self::clean_text(&raw_text);
         let chunks = Self::chunk_text(&clean_text, CHUNK_MAX_WORDS, CHUNK_OVERLAP_SENTENCES);
 
@@ -135,7 +142,9 @@ impl ProcessorActor {
 
                     let shard_idx = get_target_shard(&url, indexers.len());
                     let indexer_ref: ActorRef<IndexerMessage> = indexers[shard_idx].clone().into();
-                    let _ = indexer_ref.cast(IndexerMessage::StoreChunks(url, chunks, embeddings));
+                    let _ = indexer_ref.cast(IndexerMessage::StoreChunks(
+                        url, title, descrition, chunks, embeddings,
+                    ));
                 }
             }
             Err(e) => {
@@ -173,8 +182,8 @@ impl Actor for ProcessorActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            ProcessorMessage::ProcessDocument(url, raw_text) => {
-                self.handle_process_document(state, url, raw_text);
+            ProcessorMessage::ProcessDocument(url, raw_text, title, description) => {
+                self.handle_process_document(state, url, raw_text, title, description);
             }
         }
         Ok(())
