@@ -46,15 +46,18 @@ async fn main() {
     let app = api::build_router(query_pool.clone());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install Ctrl+C handler");
-            info!("Ctrl+C received. Gracefully shutting down the HTTP server (waiting for active requests to finish)...");
-        })
-        .await
-        .expect("Failed to start HTTP server");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Ctrl+C received. Gracefully shutting down the HTTP server...");
+    })
+    .await
+    .expect("Failed to start HTTP server");
 
     info!("Shutting down Seed Node...");
 }

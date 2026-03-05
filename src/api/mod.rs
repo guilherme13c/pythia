@@ -1,5 +1,9 @@
 use axum::{Router, routing::get};
 use ractor::ActorRef;
+use std::sync::Arc;
+use tower_governor::{
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
+};
 
 use crate::actors::query::messages::QueryMessage;
 
@@ -7,9 +11,19 @@ pub mod handlers;
 pub mod models;
 
 pub fn build_router(query_pool: Vec<ActorRef<QueryMessage>>) -> Router {
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_millisecond(200)
+            .burst_size(5)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .unwrap(),
+    );
+
     Router::new()
         .route("/health", get(handlers::health_handler))
         .route("/search", get(handlers::search_handler))
+        .layer(GovernorLayer::new(governor_conf))
         .with_state(query_pool)
 }
 
@@ -68,11 +82,19 @@ mod tests {
 
         let app = build_router(vec![mock_ref]);
 
-        let request = Request::builder()
+        let mut request = Request::builder()
             .uri("/search?q=Rust&limit=5")
             .method("GET")
+            .header("X-Forwarded-For", "203.0.113.195")
             .body(Body::empty())
             .unwrap();
+
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                8080,
+            ))));
 
         let response = app.oneshot(request).await.unwrap();
 

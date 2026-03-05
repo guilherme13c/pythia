@@ -29,6 +29,7 @@ bloomfilter = "3.0.1"
 stop-words = "0.10.0"
 rust-stemmers = "1.2.0"
 uuid = "1.21.0"
+tower_governor = "0.8.0"
 
 [dev-dependencies]
 tempfile = "3.10.1"
