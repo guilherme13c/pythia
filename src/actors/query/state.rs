@@ -7,6 +7,7 @@ pub struct PendingRequest {
     pub reply_port: RpcReplyPort<Vec<SearchResult>>,
     pub original_text: String,
     pub limit: usize,
+    pub offset: usize,
     pub replies_received: usize,
     pub expected_replies: usize,
     pub all_vec_results: Vec<SearchResult>,

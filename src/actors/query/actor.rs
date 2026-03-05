@@ -14,6 +14,8 @@ use super::state::QueryState;
 
 pub struct QueryActor;
 
+const MAX_CANDIDATE_LIMIT: usize = 100;
+
 impl QueryActor {
     fn get_cache_dir() -> PathBuf {
         let path = env::var("FASTEMBED_CACHE_PATH")
@@ -181,20 +183,27 @@ impl QueryActor {
 
     fn finalize_query(state: &mut QueryState, request_id: String) {
         if let Some(req) = state.pending_requests.remove(&request_id) {
-            let candidate_limit = std::cmp::max(req.limit * 5, 250);
+            let candidate_limit = std::cmp::max((req.limit + req.offset) * 5, MAX_CANDIDATE_LIMIT);
             let candidates =
                 Self::compute_rrf(req.all_vec_results, req.all_fts_results, candidate_limit);
 
-            let mut final_results = Self::rerank_candidates(
+            let final_results = Self::rerank_candidates(
                 &mut state.reranker_model,
                 &req.original_text,
                 candidates,
                 req.limit,
             );
-            for result in &mut final_results {
-                result.snippet = Self::generate_snippet(&result.text, &req.original_text);
-            }
-            let _ = req.reply_port.send(final_results);
+            let paged_results: Vec<SearchResult> = final_results
+                .into_iter()
+                .skip(req.offset)
+                .take(req.limit)
+                .map(|mut result| {
+                    result.snippet = Self::generate_snippet(&result.text, &req.original_text);
+                    result
+                })
+                .collect();
+
+            let _ = req.reply_port.send(paged_results);
         }
     }
 }
@@ -229,7 +238,7 @@ impl Actor for QueryActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            QueryMessage::Query(parsed_query, limit, reply) => {
+            QueryMessage::Query(parsed_query, limit, offset, reply) => {
                 let request_id = uuid::Uuid::new_v4().to_string();
                 let embeddings = state
                     .embedding_model
@@ -237,7 +246,7 @@ impl Actor for QueryActor {
                     .unwrap();
                 let query_vector = embeddings[0].clone();
 
-                let candidate_limit = std::cmp::max(limit * 5, 250);
+                let candidate_limit = std::cmp::max((limit + offset) * 5, MAX_CANDIDATE_LIMIT);
 
                 let indexers = ractor::pg::get_members(&"indexers".to_string());
                 let expected_replies = indexers.len();
@@ -253,6 +262,7 @@ impl Actor for QueryActor {
                         reply_port: reply,
                         original_text: parsed_query.original_text.clone(),
                         limit,
+                        offset,
                         replies_received: 0,
                         expected_replies,
                         all_vec_results: Vec::new(),

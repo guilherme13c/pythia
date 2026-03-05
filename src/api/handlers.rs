@@ -13,6 +13,7 @@ pub async fn search_handler(
     Query(params): Query<SearchParams>,
 ) -> Json<Vec<SearchResult>> {
     let limit = params.limit.unwrap_or(10);
+    let offset = params.offset.unwrap_or(0);
 
     let lang = params.lang.unwrap_or_else(|| "en".to_string());
 
@@ -29,6 +30,7 @@ pub async fn search_handler(
     let results = ractor::call!(query_ref, |reply| QueryMessage::Query(
         parsed_query,
         limit,
+        offset,
         reply,
     ))
     .unwrap_or_else(|_| vec![]);
