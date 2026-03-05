@@ -1,5 +1,6 @@
 use axum::{Router, routing::get};
 use ractor::ActorRef;
+use std::sync::Arc;
 use tower_governor::{
     GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
@@ -22,7 +23,7 @@ pub fn build_router(query_pool: Vec<ActorRef<QueryMessage>>) -> Router {
     Router::new()
         .route("/health", get(handlers::health_handler))
         .route("/search", get(handlers::search_handler))
-        .layer(governor_conf)
+        .layer(GovernorLayer::new(governor_conf))
         .with_state(query_pool)
 }
 

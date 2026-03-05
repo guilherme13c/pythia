@@ -91,7 +91,11 @@ fn bench_scheduler_efficiency(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let manager = ManagerActor;
 
-    let (worker_ref, _) = rt.block_on(async { Actor::spawn(None, DummyWorker, ()).await.unwrap() });
+    let (_worker_ref, _) = rt.block_on(async {
+        Actor::spawn(Some("dummy-worker".to_string()), DummyWorker, ())
+            .await
+            .unwrap()
+    });
 
     let mut state = ManagerState::in_memory();
     let domain = "wikipedia.org";
@@ -111,7 +115,7 @@ fn bench_scheduler_efficiency(c: &mut Criterion) {
 
     c.bench_function("scheduler_skip_delayed_urls", |b| {
         b.iter(|| {
-            manager.handle_request_work(black_box(&mut state), worker_ref.clone());
+            manager.handle_request_work(black_box(&mut state), "dummy-worker".to_string());
         })
     });
 }
