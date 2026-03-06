@@ -40,11 +40,11 @@ impl ProcessorActor {
         .unwrap()
     }
 
-    fn clean_text(raw_text: &str) -> String {
+    pub fn clean_text(raw_text: &str) -> String {
         raw_text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    fn separate_sentences(clean_text: &str) -> Vec<String> {
+    pub fn separate_sentences(clean_text: &str) -> Vec<String> {
         let mut sentences = Vec::new();
         let mut current_sentence = String::new();
 
@@ -62,7 +62,7 @@ impl ProcessorActor {
         sentences
     }
 
-    fn chunk_text(clean_text: &str, max_words: usize, overlap_sentences: usize) -> Vec<String> {
+    pub fn chunk_text(clean_text: &str, max_words: usize, overlap_sentences: usize) -> Vec<String> {
         let sentences = Self::separate_sentences(clean_text);
 
         if sentences.is_empty() {

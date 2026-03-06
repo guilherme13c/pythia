@@ -1,6 +1,7 @@
 use pythia::actors::crawler::manager::actor::ManagerActor;
 use pythia::actors::crawler::manager::messages::ManagerMessage;
-use pythia::actors::crawler::worker::actor::WorkerActor;
+use pythia::actors::crawler::worker::dynamic_worker::actor::DynamicWorkerActor;
+use pythia::actors::crawler::worker::static_worker::actor::WorkerActor;
 use pythia::config;
 use ractor::Actor;
 use ractor_cluster::NodeServer;
@@ -49,11 +50,24 @@ async fn main() {
         .await
         .unwrap();
 
-    for w in 1..=app_config.workers_per_crawler_shard {
+    for w in 1..=app_config.static_workers_per_crawler_shard {
         let worker_name = format!("worker-{}-{}", shard_idx, w);
         Actor::spawn(Some(worker_name), WorkerActor, shard_idx)
             .await
             .unwrap();
+    }
+
+    if app_config.enable_js_rendering {
+        info!(
+            "JS Rendering Enabled! Spawning {} Dynamic Workers...",
+            app_config.dynamic_workers_per_shard
+        );
+        for w in 1..=app_config.dynamic_workers_per_shard {
+            let worker_name = format!("dynamic-worker-{}-{}", shard_idx, w);
+            Actor::spawn(Some(worker_name), DynamicWorkerActor, shard_idx)
+                .await
+                .unwrap();
+        }
     }
 
     if shard_idx == 0 {

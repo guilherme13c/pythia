@@ -8,9 +8,11 @@ data:
   SEED_NODE: "query-service"
   CLUSTER_PORT: "8000"
   RUST_LOG: "info"
-  WORKERS_PER_SHARD: "2"
+  STATIC_WORKERS_PER_SHARD: "2"
+  ENABLE_JS_RENDERING: "true"
+  DYNAMIC_WORKERS_PER_SHARD: "1"
   QUERY_POOL_SIZE: "2"
-  BLOOM_FILTER_CAPACITY: "100000"
+  BLOOM_FILTER_CAPACITY: "1000000"
   BLOOM_FILTER_FP_RATE: "0.001"
 
 ---
@@ -47,7 +49,7 @@ spec:
       containers:
         - name: query
           image: pythia:v1
-          imagePullPolicy: Never # Crucial: tells K8s to use your local Docker image, not Docker Hub
+          imagePullPolicy: Never
           command: ["./query"]
           envFrom:
             - configMapRef:
@@ -60,7 +62,7 @@ kind: Deployment
 metadata:
   name: processor
 spec:
-  replicas: 2 # You can change this number anytime to scale your text processing
+  replicas: 2
   selector:
     matchLabels:
       app: processor
@@ -86,7 +88,7 @@ metadata:
   name: indexer
 spec:
   serviceName: "indexer"
-  replicas: 3 # MUST match INDEXER_SHARDS in the ConfigMap
+  replicas: 3
   selector:
     matchLabels:
       app: indexer
@@ -123,7 +125,7 @@ metadata:
   name: crawler
 spec:
   serviceName: "crawler"
-  replicas: 3 # MUST match CRAWLER_SHARDS in the ConfigMap
+  replicas: 3
   selector:
     matchLabels:
       app: crawler

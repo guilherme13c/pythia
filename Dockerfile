@@ -60,9 +60,11 @@ FROM ubuntu:24.04
 WORKDIR /app
 
 # Install required system dependencies (OpenSSL is needed for reqwest/HTTPS crawling)
-RUN apt-get update && \
-  apt-get install -y ca-certificates libssl-dev && \
-  rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \ 
+  ca-certificates \
+  libssl-dev \
+  chromium-browser \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binaries from the builder stage
 COPY --from=builder /app/target/release/crawler /app/

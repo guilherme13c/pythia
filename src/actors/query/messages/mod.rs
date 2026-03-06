@@ -118,3 +118,41 @@ impl ParsedQuery {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parsed_query_extracts_site_filter() {
+        let raw_query = "how to build a search engine site:rust-lang.org";
+        let parsed = ParsedQuery::parse(raw_query, "en");
+
+        assert_eq!(parsed.original_text, "how to build a search engine");
+        assert_eq!(parsed.site_filter, Some("rust-lang.org".to_string()));
+    }
+
+    #[test]
+    fn test_parsed_query_removes_english_stopwords() {
+        let raw_query = "what is the quick brown fox";
+        let parsed = ParsedQuery::parse(raw_query, "en");
+
+        assert!(!parsed.processed_text.contains("what"));
+        assert!(!parsed.processed_text.contains("is"));
+        assert!(!parsed.processed_text.contains("the"));
+
+        assert!(parsed.processed_text.contains("quick"));
+        assert!(parsed.processed_text.contains("brown"));
+        assert!(parsed.processed_text.contains("fox"));
+    }
+
+    #[test]
+    fn test_parsed_query_multilingual_stemming() {
+        let raw_query_fr = "les chats mangent";
+        let parsed_fr = ParsedQuery::parse(raw_query_fr, "fr");
+
+        assert!(!parsed_fr.processed_text.contains("les"));
+        assert!(parsed_fr.processed_text.contains("chat"));
+        assert!(parsed_fr.processed_text.contains("mang"));
+    }
+}

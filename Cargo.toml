@@ -33,6 +33,7 @@ tower_governor = "0.8.0"
 pdf-extract = "0.10.0"
 quick-xml = "0.39.2"
 lopdf = "0.39.0"
+headless_chrome = "1.0.21"
 
 [dev-dependencies]
 tempfile = "3.10.1"

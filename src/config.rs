@@ -6,7 +6,9 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub log_level: String,
-    pub workers_per_crawler_shard: usize,
+    pub static_workers_per_crawler_shard: usize,
+    pub enable_js_rendering: bool,
+    pub dynamic_workers_per_shard: usize,
     pub seeds_file: String,
     pub query_pool_size: usize,
     pub bloom_filter_capacity: usize,
@@ -35,10 +37,20 @@ impl Config {
 
             log_level: env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
 
-            workers_per_crawler_shard: env::var("WORKERS_PER_SHARD")
+            static_workers_per_crawler_shard: env::var("STATIC_WORKERS_PER_SHARD")
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
-                .expect("WORKERS_PER_CRAWLER_SHARD must be a valid number"),
+                .expect("STATIC_WORKERS_PER_SHARD must be a valid number"),
+
+            enable_js_rendering: std::env::var("ENABLE_JS_RENDERING")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+
+            dynamic_workers_per_shard: std::env::var("DYNAMIC_WORKERS_PER_SHARD")
+                .unwrap_or_else(|_| "1".to_string())
+                .parse()
+                .unwrap_or(1),
 
             seeds_file: env::var("SEEDS_FILE").unwrap_or_else(|_| "seeds.txt".to_string()),
 
@@ -114,7 +126,9 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 8080,
             log_level: "info".to_string(),
-            workers_per_crawler_shard: 1,
+            static_workers_per_crawler_shard: 1,
+            enable_js_rendering: false,
+            dynamic_workers_per_shard: 1,
             seeds_file: temp_file.path().to_str().unwrap().to_string(),
             query_pool_size: 4,
             bloom_filter_capacity: 100000,
