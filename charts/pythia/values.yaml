@@ -1,0 +1,50 @@
+image:
+  repository: pythia
+  tag: v1
+  # Never: use a locally loaded image (Minikube/Kind).
+  # IfNotPresent or Always: pull from a registry.
+  pullPolicy: Never
+
+# Cluster-wide configuration. These become environment variables in every pod
+# via the pythia-config ConfigMap (mirrors pythia-cluster.yaml).
+config:
+  clusterCookie: "pythia_local_dev_cookie"
+  seedNode: "query-service"
+  clusterPort: "8000"
+  rustLog: "info"
+  workersPerShard: "2"
+  queryPoolSize: "2"
+  bloomFilterCapacity: "100000"
+  bloomFilterFpRate: "0.001"
+
+query:
+  replicas: 1
+  # Port exposed by the query HTTP API.
+  httpPort: 3000
+  resources: {}
+  #  requests:
+  #    cpu: 100m
+  #    memory: 128Mi
+  #  limits:
+  #    cpu: 500m
+  #    memory: 512Mi
+
+processor:
+  replicas: 2
+  resources: {}
+
+indexer:
+  # Must equal the number of INDEXER_SHARDS expected by the cluster.
+  replicas: 3
+  storage:
+    size: 1Gi
+    # storageClassName: "" # Uncomment to specify a StorageClass.
+  resources: {}
+
+crawler:
+  # Must equal the number of CRAWLER_SHARDS expected by the cluster.
+  replicas: 3
+  storage:
+    size: 1Gi
+    # storageClassName: "" # Uncomment to specify a StorageClass.
+  resources: {}

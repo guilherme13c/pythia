@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pythia.fullname" . }}-config
+  labels:
+    {{- include "pythia.labels" . | nindent 4 }}
+data:
+  CLUSTER_COOKIE: {{ .Values.config.clusterCookie | quote }}
+  SEED_NODE: {{ .Values.config.seedNode | quote }}
+  CLUSTER_PORT: {{ .Values.config.clusterPort | quote }}
+  RUST_LOG: {{ .Values.config.rustLog | quote }}
+  WORKERS_PER_SHARD: {{ .Values.config.workersPerShard | quote }}
+  QUERY_POOL_SIZE: {{ .Values.config.queryPoolSize | quote }}
+  BLOOM_FILTER_CAPACITY: {{ .Values.config.bloomFilterCapacity | quote }}
+  BLOOM_FILTER_FP_RATE: {{ .Values.config.bloomFilterFpRate | quote }}

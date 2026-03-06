@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pythia.fullname" . }}-processor
+  labels:
+    {{- include "pythia.labels" . | nindent 4 }}
+    {{- $comp := dict "component" "processor" }}
+    {{- include "pythia.selectorLabels" (merge $comp .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.processor.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "pythia.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "pythia.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: processor
+    spec:
+      containers:
+        - name: processor
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./processor"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "pythia.fullname" . }}-config
+          {{- with .Values.processor.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

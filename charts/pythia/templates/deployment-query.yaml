@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pythia.fullname" . }}-query
+  labels:
+    {{- include "pythia.labels" . | nindent 4 }}
+    {{- $comp := dict "component" "query" }}
+    {{- include "pythia.selectorLabels" (merge $comp .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.query.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "pythia.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: query
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "pythia.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: query
+    spec:
+      containers:
+        - name: query
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./query"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "pythia.fullname" . }}-config
+          ports:
+            - name: http
+              containerPort: {{ .Values.query.httpPort }}
+            - name: cluster
+              containerPort: {{ .Values.config.clusterPort }}
+          {{- with .Values.query.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "pythia.fullname" . }}-indexer
+  labels:
+    {{- include "pythia.labels" . | nindent 4 }}
+    {{- $comp := dict "component" "indexer" }}
+    {{- include "pythia.selectorLabels" (merge $comp .) | nindent 4 }}
+spec:
+  serviceName: {{ include "pythia.fullname" . }}-indexer
+  replicas: {{ .Values.indexer.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "pythia.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: indexer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "pythia.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: indexer
+    spec:
+      containers:
+        - name: indexer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["./indexer"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "pythia.fullname" . }}-config
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          {{- with .Values.indexer.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.indexer.storage.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.indexer.storage.size }}

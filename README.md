@@ -9,6 +9,8 @@
     - [2. Running Locally](#2-running-locally)
     - [3. Build the Docker Image](#3-build-the-docker-image)
     - [4. Deploy to Kubernetes](#4-deploy-to-kubernetes)
+      - [Option A — Raw manifest](#option-a--raw-manifest)
+      - [Option B — Helm chart](#option-b--helm-chart)
     - [5. Search](#5-search)
     - [6. Scaling](#6-scaling)
   - [Contributing](#contributing)
@@ -101,6 +103,8 @@ load the image into your cluster (e.g., minikube image load pythia:v1).
 
 ### 4. Deploy to Kubernetes
 
+#### Option A — Raw manifest
+
 Spin up the entire cluster (Query API, Processors, Indexers, and Crawlers)
 using the provided manifest:
 
@@ -113,6 +117,67 @@ You can watch the actors discover each other and boot up:
 ```bash
 kubectl get pods -w
 ```
+
+#### Option B — Helm chart
+
+A Helm chart is available under `charts/pythia/` for installations where you
+want to customise replicas, resource limits, or the container image without
+editing raw YAML.
+
+**Prerequisites:** [Helm 3](https://helm.sh/docs/intro/install/) must be
+installed.
+
+Install with the defaults (mirrors `pythia-cluster.yaml`):
+
+```bash
+helm install pythia ./charts/pythia
+```
+
+To override values at install time — for example, to scale the crawler and
+indexer and set resource limits:
+
+```bash
+helm install pythia ./charts/pythia \
+  --set crawler.replicas=5 \
+  --set indexer.replicas=5 \
+  --set processor.replicas=4 \
+  --set query.resources.requests.memory=256Mi
+```
+
+Or supply a custom values file:
+
+```bash
+helm install pythia ./charts/pythia -f my-values.yaml
+```
+
+To upgrade an existing release after changing values:
+
+```bash
+helm upgrade pythia ./charts/pythia --set crawler.replicas=2
+```
+
+To uninstall:
+
+```bash
+helm uninstall pythia
+```
+
+**Key values** (see `charts/pythia/values.yaml` for the full list):
+
+| Key | Default | Description |
+|---|---|---|
+| `image.repository` | `pythia` | Container image name |
+| `image.tag` | `v1` | Image tag |
+| `image.pullPolicy` | `Never` | `Never` for local clusters (Minikube/Kind); use `IfNotPresent` or `Always` for a registry |
+| `crawler.replicas` | `3` | Number of crawler shards |
+| `indexer.replicas` | `3` | Number of indexer shards |
+| `processor.replicas` | `2` | Number of processor pods |
+| `query.replicas` | `1` | Number of query pods |
+| `crawler.storage.size` | `1Gi` | PVC size per crawler pod |
+| `indexer.storage.size` | `1Gi` | PVC size per indexer pod |
+| `config.clusterCookie` | `pythia_local_dev_cookie` | Shared secret for cluster auth |
+| `config.workersPerShard` | `2` | Worker goroutines per crawler shard |
+| `config.queryPoolSize` | `2` | Query thread-pool size |
 
 ### 5. Search
 

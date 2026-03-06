@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-service
+  labels:
+    {{- include "pythia.labels" . | nindent 4 }}
+    {{- $comp := dict "component" "query" }}
+    {{- include "pythia.selectorLabels" (merge $comp .) | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: {{ include "pythia.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: query
+  ports:
+    - name: http
+      port: {{ .Values.query.httpPort }}
+      targetPort: {{ .Values.query.httpPort }}
+    - name: cluster
+      port: {{ .Values.config.clusterPort }}
+      targetPort: {{ .Values.config.clusterPort }}
