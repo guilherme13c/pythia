@@ -30,6 +30,9 @@ stop-words = "0.10.0"
 rust-stemmers = "1.2.0"
 uuid = "1.21.0"
 tower_governor = "0.8.0"
+pdf-extract = "0.10.0"
+quick-xml = "0.39.2"
+lopdf = "0.39.0"
 
 [dev-dependencies]
 tempfile = "3.10.1"

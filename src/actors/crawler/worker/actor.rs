@@ -35,10 +35,32 @@ impl WorkerActor {
             Ok(response) if response.status().is_success() => {
                 self.report_success(state, &domain, &url);
 
-                if let Ok(html) = response.text().await {
-                    let (links, text, title, description) = Self::extract_content(&html, &url);
-                    self.send_to_processor(url.clone(), text, title, description);
-                    self.route_new_links(links);
+                let content_type = response
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|val| val.to_str().ok())
+                    .unwrap_or("text/html")
+                    .to_lowercase();
+
+                if content_type.contains("application/pdf") {
+                    if let Ok(bytes) = response.bytes().await {
+                        if let Ok(text) = pdf_extract::extract_text_from_mem(&bytes) {
+                            let (title, description) = Self::extract_pdf_metadata(&bytes, &url);
+                            debug!("Extracted {} bytes of text from PDF: {}", text.len(), url);
+                            self.send_to_processor(url.clone(), text, title, description);
+                        }
+                    }
+                } else if content_type.contains("xml") {
+                    if let Ok(xml_str) = response.text().await {
+                        let (text, title, description) = Self::extract_xml(&xml_str);
+                        self.send_to_processor(url.clone(), text, title, description);
+                    }
+                } else {
+                    if let Ok(html) = response.text().await {
+                        let (links, text, title, description) = Self::extract_content(&html, &url);
+                        self.send_to_processor(url.clone(), text, title, description);
+                        self.route_new_links(links);
+                    }
                 }
             }
             Ok(response) if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
@@ -150,6 +172,105 @@ impl WorkerActor {
             .filter(|s| !s.is_empty());
 
         (links, raw_text, title, description)
+    }
+
+    fn extract_pdf_metadata(bytes: &[u8], url_str: &str) -> (Option<String>, Option<String>) {
+        let mut title = None;
+        let mut description = None;
+
+        if let Ok(doc) = lopdf::Document::load_mem(bytes)
+            && let Ok(info_ref) = doc.trailer.get(b"Info")
+            && let Ok(info_dict) = doc
+                .get_object(info_ref.as_reference().unwrap_or((0, 0)))
+                .and_then(|obj| obj.as_dict())
+        {
+            if let Ok(t_bytes) = info_dict.get(b"Title").and_then(|obj| obj.as_str()) {
+                let trimmed = String::from_utf8_lossy(t_bytes).trim().to_string();
+                if !trimmed.is_empty() {
+                    title = Some(trimmed);
+                }
+            }
+            if let Ok(s_bytes) = info_dict.get(b"Subject").and_then(|obj| obj.as_str()) {
+                let trimmed = String::from_utf8_lossy(s_bytes).trim().to_string();
+                if !trimmed.is_empty() {
+                    description = Some(trimmed);
+                }
+            }
+        }
+
+        if title.is_none()
+            && let Ok(parsed_url) = Url::parse(url_str)
+            && let Some(segments) = parsed_url.path_segments()
+            && let Some(last) = segments.last()
+        {
+            let fallback_title = last.replace(".pdf", "").replace(['-', '_'], " ");
+            if !fallback_title.trim().is_empty() {
+                title = Some(fallback_title);
+            }
+        }
+
+        (title, description)
+    }
+
+    fn extract_xml(xml: &str) -> (String, Option<String>, Option<String>) {
+        use quick_xml::Reader;
+        use quick_xml::events::Event;
+
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+
+        let mut text_content = Vec::new();
+        let mut title = None;
+        let mut description = None;
+
+        let mut current_tag = String::new();
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(ref e)) => {
+                    current_tag = String::from_utf8_lossy(e.name().as_ref()).to_lowercase();
+                }
+                Ok(Event::Text(e)) => {
+                    let text = String::from_utf8_lossy(e.as_ref());
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        text_content.push(trimmed.to_string());
+
+                        if current_tag == "title" && title.is_none() {
+                            title = Some(trimmed.to_string());
+                        } else if (current_tag == "description" || current_tag == "summary")
+                            && description.is_none()
+                        {
+                            description = Some(trimmed.to_string());
+                        }
+                    }
+                }
+                Ok(Event::CData(e)) => {
+                    let text = String::from_utf8_lossy(e.as_ref());
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        text_content.push(trimmed.to_string());
+
+                        if current_tag == "title" && title.is_none() {
+                            title = Some(trimmed.to_string());
+                        } else if (current_tag == "description" || current_tag == "summary")
+                            && description.is_none()
+                        {
+                            description = Some(trimmed.to_string());
+                        }
+                    }
+                }
+                Ok(Event::End(_)) => {
+                    current_tag.clear();
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => (),
+            }
+            buf.clear();
+        }
+
+        (text_content.join(" "), title, description)
     }
 
     fn send_to_processor(
@@ -427,5 +548,38 @@ mod tests {
             links.contains(&"https://example.com/faq".to_string()),
             "Should strip URL fragments"
         );
+    }
+
+    #[test]
+    fn test_extract_xml() {
+        let xml = r#"
+            <?xml version="1.0" encoding="UTF-8"?>
+            <bookstore>
+                <book category="cooking">
+                    <title lang="en">Everyday Italian</title>
+                    <author>Giada De Laurentiis</author>
+                    <year>2005</year>
+                    <price>30.00</price>
+                    <summary><![CDATA[A great book about <b>Italian</b> cooking.]]></summary>
+                </book>
+            </bookstore>
+        "#;
+
+        let (extracted_text, title, description) = WorkerActor::extract_xml(xml);
+
+        assert_eq!(title, Some("Everyday Italian".to_string()));
+        assert_eq!(
+            description,
+            Some("A great book about <b>Italian</b> cooking.".to_string())
+        );
+
+        assert!(extracted_text.contains("Everyday Italian"));
+        assert!(extracted_text.contains("Giada De Laurentiis"));
+        assert!(extracted_text.contains("2005"));
+        assert!(extracted_text.contains("30.00"));
+        assert!(extracted_text.contains("A great book about <b>Italian</b> cooking."));
+
+        assert!(!extracted_text.contains("<book>"));
+        assert!(!extracted_text.contains("</author>"));
     }
 }
