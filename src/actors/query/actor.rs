@@ -3,6 +3,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tracing::{error, info};
 
 use crate::actors::indexer::messages::{IndexerMessage, SearchRequestPayload};
@@ -181,30 +182,37 @@ impl QueryActor {
         result
     }
 
-    fn finalize_query(state: &mut QueryState, request_id: String) {
-        if let Some(req) = state.pending_requests.remove(&request_id) {
-            let candidate_limit = std::cmp::max((req.limit + req.offset) * 5, MAX_CANDIDATE_LIMIT);
-            let candidates =
-                Self::compute_rrf(req.all_vec_results, req.all_fts_results, candidate_limit);
+    async fn finalize_query(
+        reranker_arc: Arc<Mutex<TextRerank>>,
+        req: PendingRequest,
+        candidate_limit: usize,
+    ) {
+        let candidates =
+            Self::compute_rrf(req.all_vec_results, req.all_fts_results, candidate_limit);
+        let query_text = req.original_text.clone();
+        let limit = req.limit;
 
-            let final_results = Self::rerank_candidates(
-                &mut state.reranker_model,
-                &req.original_text,
-                candidates,
-                req.limit,
-            );
-            let paged_results: Vec<SearchResult> = final_results
-                .into_iter()
-                .skip(req.offset)
-                .take(req.limit)
-                .map(|mut result| {
-                    result.snippet = Self::generate_snippet(&result.text, &req.original_text);
-                    result
-                })
-                .collect();
+        let final_results = tokio::task::spawn_blocking(move || {
+            let mut reranker = reranker_arc.lock().unwrap();
+            Self::rerank_candidates(&mut reranker, &query_text, candidates, limit)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            error!("Reranking task panicked: {}", e);
+            vec![]
+        });
 
-            let _ = req.reply_port.send(paged_results);
-        }
+        let paged_results: Vec<SearchResult> = final_results
+            .into_iter()
+            .skip(req.offset)
+            .take(req.limit)
+            .map(|mut result| {
+                result.snippet = Self::generate_snippet(&result.text, &req.original_text);
+                result
+            })
+            .collect();
+
+        let _ = req.reply_port.send(paged_results);
     }
 }
 
@@ -225,8 +233,8 @@ impl Actor for QueryActor {
         }
 
         Ok(QueryState {
-            embedding_model: Self::initialize_model(),
-            reranker_model: Self::initialize_reranker(),
+            embedding_model: Arc::new(Mutex::new(Self::initialize_model())),
+            reranker_model: Arc::new(Mutex::new(Self::initialize_reranker())),
             pending_requests: HashMap::new(),
         })
     }
@@ -240,10 +248,17 @@ impl Actor for QueryActor {
         match message {
             QueryMessage::Query(parsed_query, limit, offset, reply) => {
                 let request_id = uuid::Uuid::new_v4().to_string();
-                let embeddings = state
-                    .embedding_model
-                    .embed(vec![parsed_query.original_text.clone()], None)
-                    .unwrap();
+
+                let original_text = parsed_query.original_text.clone();
+                let model_arc = state.embedding_model.clone();
+
+                let embeddings = tokio::task::spawn_blocking(move || {
+                    let mut model = model_arc.lock().unwrap();
+                    model.embed(vec![original_text], None).unwrap()
+                })
+                .await
+                .unwrap();
+
                 let query_vector = embeddings[0].clone();
 
                 let candidate_limit = std::cmp::max((limit + offset) * 5, MAX_CANDIDATE_LIMIT);
@@ -296,8 +311,15 @@ impl Actor for QueryActor {
                         complete = true;
                     }
                 }
+
                 if complete {
-                    Self::finalize_query(state, request_id);
+                    if let Some(req) = state.pending_requests.remove(&request_id) {
+                        let candidate_limit =
+                            std::cmp::max((req.limit + req.offset) * 5, MAX_CANDIDATE_LIMIT);
+                        let reranker_arc = state.reranker_model.clone();
+
+                        Self::finalize_query(reranker_arc, req, candidate_limit).await;
+                    }
                 }
             }
         }
@@ -308,6 +330,7 @@ impl Actor for QueryActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastembed::RerankInitOptions;
 
     #[test]
     fn test_compute_rrf_boosts_common_results() {
@@ -364,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_rerank_candidates_reorders_by_semantic_relevance() {
-        let mut reranker = fastembed::TextRerank::try_new(Default::default())
+        let mut reranker = fastembed::TextRerank::try_new(RerankInitOptions::default())
             .expect("Failed to init test reranker");
 
         let query = "what is the rust programming language?";

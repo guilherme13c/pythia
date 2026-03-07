@@ -11,7 +11,9 @@ ractor_cluster_derive = "0.15.10"
 url = "2.5.8"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
-reqwest = { version = "0.13.2", features = ["rustls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls-webpki-roots",
+] }
 scraper = "0.25.0"
 fastembed = "5.11.0"
 lancedb = "0.26.2"

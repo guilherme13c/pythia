@@ -19,6 +19,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 ENV RUSTFLAGS="--cfg tokio_unstable"
 
+ENV CARGO_BUILD_JOBS=2
+
 # 1. Copy only the dependency manifests
 COPY Cargo.toml Cargo.lock ./
 
@@ -64,6 +66,7 @@ RUN apt-get update && apt-get install -y \
   ca-certificates \
   libssl-dev \
   chromium-browser \
+  && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binaries from the builder stage

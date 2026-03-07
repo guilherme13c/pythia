@@ -45,7 +45,7 @@ impl DynamicWorkerActor {
                 common::route_new_links(links);
             }
             Ok(Err(e)) => warn!("Headless browser error fetching {}: {}", url, e),
-            Err(e) => warn!("Task join error for {}: {}", url, e),
+            Err(e) => warn!("Task join error for {}: {:?}", url, e),
         }
         self.request_more_work(state, myself);
     }
@@ -111,7 +111,7 @@ impl Actor for DynamicWorkerActor {
 
         let http_client = Client::builder()
             .user_agent("PythiaSearchBot/1.0 (Dynamic)")
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(10))
             .build()
             .expect("Failed to build HTTP client");
 

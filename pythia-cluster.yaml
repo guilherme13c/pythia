@@ -4,15 +4,17 @@ kind: ConfigMap
 metadata:
   name: pythia-config
 data:
+  API_HOST: "0.0.0.0"
+  API_PORT: "3000"
   CLUSTER_COOKIE: "pythia_local_dev_cookie"
   SEED_NODE: "query-service"
   CLUSTER_PORT: "8000"
   RUST_LOG: "info"
-  STATIC_WORKERS_PER_SHARD: "2"
-  ENABLE_JS_RENDERING: "true"
+  WORKERS_PER_SHARD: "2"
+  ENABLE_JS_RENDERING: "false"
   DYNAMIC_WORKERS_PER_SHARD: "1"
-  QUERY_POOL_SIZE: "2"
-  BLOOM_FILTER_CAPACITY: "1000000"
+  QUERY_POOL_SIZE: "1"
+  BLOOM_FILTER_CAPACITY: "100000"
   BLOOM_FILTER_FP_RATE: "0.001"
 
 ---
@@ -54,6 +56,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: pythia-config
+          env:
+            - name: CLUSTER_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
 
 ---
 # 3. Processor (Stateless - easy to scale!)
@@ -62,7 +73,7 @@ kind: Deployment
 metadata:
   name: processor
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: processor
@@ -79,6 +90,15 @@ spec:
           envFrom:
             - configMapRef:
                 name: pythia-config
+          env:
+            - name: CLUSTER_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
 
 ---
 # 4. Indexer (Stateful - requires storage and strict Shard IDs)
@@ -88,7 +108,7 @@ metadata:
   name: indexer
 spec:
   serviceName: "indexer"
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: indexer
@@ -105,9 +125,18 @@ spec:
           envFrom:
             - configMapRef:
                 name: pythia-config
+          env:
+            - name: CLUSTER_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           volumeMounts:
             - name: data
               mountPath: /app/data
+          resources:
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -125,7 +154,7 @@ metadata:
   name: crawler
 spec:
   serviceName: "crawler"
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: crawler
@@ -142,9 +171,18 @@ spec:
           envFrom:
             - configMapRef:
                 name: pythia-config
+          env:
+            - name: CLUSTER_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           volumeMounts:
             - name: data
               mountPath: /app/data
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
   volumeClaimTemplates:
     - metadata:
         name: data

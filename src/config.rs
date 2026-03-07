@@ -3,8 +3,10 @@ use std::fs;
 use uuid::Uuid;
 
 pub struct Config {
-    pub host: String,
-    pub port: u16,
+    pub cluster_host: String,
+    pub cluster_port: u16,
+    pub api_host: String,
+    pub api_port: u16,
     pub log_level: String,
     pub static_workers_per_crawler_shard: usize,
     pub enable_js_rendering: bool,
@@ -14,7 +16,6 @@ pub struct Config {
     pub bloom_filter_capacity: usize,
     pub bloom_filter_fp_rate: f64,
     pub node_name: String,
-    pub cluster_port: u16,
     pub cookie: String,
     pub seed_node: Option<String>,
     pub shard_id: usize,
@@ -28,12 +29,14 @@ impl Config {
         }
 
         Self {
-            host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+            cluster_host: env::var("CLUSTER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
 
-            port: env::var("PORT")
+            api_host: env::var("API_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+
+            api_port: env::var("API_PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse()
-                .expect("PORT must be a valid number"),
+                .expect("API_PORT must be a valid number"),
 
             log_level: env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
 
@@ -123,8 +126,9 @@ mod tests {
         writeln!(temp_file, "https://rust-lang.org").unwrap();
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
-            port: 8080,
+            cluster_host: "127.0.0.1".to_string(),
+            api_host: "0.0.0.0".to_string(),
+            api_port: 8080,
             log_level: "info".to_string(),
             static_workers_per_crawler_shard: 1,
             enable_js_rendering: false,
@@ -150,15 +154,19 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         unsafe {
-            env::remove_var("HOST");
-            env::remove_var("PORT");
+            env::remove_var("CLUSTER_HOST");
+            env::remove_var("CLUSTER_PORT");
+            env::remove_var("API_HOST");
+            env::remove_var("API_PORT");
             env::remove_var("QUERY_POOL_SIZE");
         }
 
         let config = Config::load();
 
-        assert_eq!(config.host, "0.0.0.0");
-        assert_eq!(config.port, 3000);
+        assert_eq!(config.api_host, "0.0.0.0");
+        assert_eq!(config.api_port, 3000);
+        assert_eq!(config.cluster_host, "0.0.0.0");
+        assert_eq!(config.cluster_port, 8000);
         assert_eq!(config.query_pool_size, 4);
     }
 }

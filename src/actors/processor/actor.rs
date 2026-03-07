@@ -4,7 +4,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use tracing::{debug, error, info};
+use std::sync::Arc;
+use tracing::{error, info};
 use url::Url;
 
 use super::messages::ProcessorMessage;
@@ -64,7 +65,6 @@ impl ProcessorActor {
 
     pub fn chunk_text(clean_text: &str, max_words: usize, overlap_sentences: usize) -> Vec<String> {
         let sentences = Self::separate_sentences(clean_text);
-
         if sentences.is_empty() {
             return Vec::new();
         }
@@ -91,42 +91,42 @@ impl ProcessorActor {
             }
 
             chunks.push(chunk_sentences.join(" "));
-
             if j == sentences.len() {
                 break;
             }
-
             i = std::cmp::max(i + 1, j.saturating_sub(overlap_sentences));
         }
 
         chunks
     }
 
-    fn handle_process_document(
+    async fn handle_process_document(
         &self,
         state: &mut ProcessorState,
         url: String,
         raw_text: String,
         title: Option<String>,
-        descrition: Option<String>,
+        description: Option<String>,
     ) {
         let clean_text = Self::clean_text(&raw_text);
         let chunks = Self::chunk_text(&clean_text, CHUNK_MAX_WORDS, CHUNK_OVERLAP_SENTENCES);
 
-        debug!(
-            "Processor split document {} into {} chunks. Generating embeddings...",
-            url,
-            chunks.len()
-        );
+        if chunks.is_empty() {
+            return;
+        }
 
-        match state.embedding_model.embed(chunks.clone(), None) {
-            Ok(embeddings) => {
-                debug!(
-                    "Successfully generated {} vectors for {}",
-                    embeddings.len(),
-                    url
-                );
+        let model = state.embedding_model.clone();
+        let chunks_clone = chunks.clone();
+        let url_clone = url.clone();
 
+        let embedding_task = tokio::task::spawn_blocking(move || {
+            let mut model_guard = model.lock().unwrap();
+            model_guard.embed(chunks_clone, None)
+        })
+        .await;
+
+        match embedding_task {
+            Ok(Ok(embeddings)) => {
                 let mut indexers = ractor::pg::get_members(&"indexers".to_string());
 
                 if !indexers.is_empty() {
@@ -140,16 +140,19 @@ impl ProcessorActor {
                             .unwrap_or(0)
                     });
 
-                    let shard_idx = get_target_shard(&url, indexers.len());
+                    let shard_idx = get_target_shard(&url_clone, indexers.len());
                     let indexer_ref: ActorRef<IndexerMessage> = indexers[shard_idx].clone().into();
                     let _ = indexer_ref.cast(IndexerMessage::StoreChunks(
-                        url, title, descrition, chunks, embeddings,
+                        url_clone,
+                        title,
+                        description,
+                        chunks,
+                        embeddings,
                     ));
                 }
             }
-            Err(e) => {
-                error!("Failed to generate embeddings for {}: {}", url, e);
-            }
+            Ok(Err(e)) => error!("Failed to generate embeddings for {}: {:?}", url, e),
+            Err(e) => error!("Tokio blocking task failed for {}: {:?}", url, e),
         }
     }
 }
@@ -165,14 +168,11 @@ impl Actor for ProcessorActor {
         _args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         ractor::pg::join("processors".to_string(), vec![myself.clone().into()]);
-
         info!("Processor Actor starting. Loading AI Embedding Model...");
 
-        let embedding_model = Self::initialize_model();
-
-        info!("AI Model loaded successfully!");
-
-        Ok(ProcessorState { embedding_model })
+        Ok(ProcessorState {
+            embedding_model: Arc::new(std::sync::Mutex::new(Self::initialize_model())),
+        })
     }
 
     async fn handle(
@@ -183,7 +183,8 @@ impl Actor for ProcessorActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             ProcessorMessage::ProcessDocument(url, raw_text, title, description) => {
-                self.handle_process_document(state, url, raw_text, title, description);
+                self.handle_process_document(state, url, raw_text, title, description)
+                    .await;
             }
         }
         Ok(())

@@ -55,7 +55,7 @@ impl WorkerActor {
                 self.report_rate_limit(state, &domain, &url);
             }
             Ok(response) => warn!("Failed to fetch {} - Status: {}", url, response.status()),
-            Err(e) => warn!("Network error fetching {}: {}", url, e),
+            Err(e) => warn!("Network error fetching {}: {:?}", url, e),
         }
         self.request_more_work(state, myself);
     }
@@ -123,7 +123,7 @@ impl Actor for WorkerActor {
         info!("Static Worker Actor starting up...");
         let http_client = Client::builder()
             .user_agent("PythiaSearchBot/1.0")
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(10))
             .build()
             .unwrap();
 

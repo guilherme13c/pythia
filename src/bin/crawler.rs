@@ -23,7 +23,7 @@ async fn main() {
         app_config.cluster_port,
         app_config.cookie.clone(),
         app_config.node_name.clone(),
-        app_config.host.clone(),
+        app_config.cluster_host.clone(),
         None,
         None,
     );
