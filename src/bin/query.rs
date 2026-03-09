@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use pythia::actors::query::actor::QueryActor;
 use pythia::api;
 use pythia::config;
@@ -22,7 +24,7 @@ async fn main() {
         app_config.cluster_port,
         app_config.cookie.clone(),
         app_config.node_name.clone(),
-        app_config.host.clone(),
+        app_config.cluster_host.clone(),
         None,
         None,
     );
@@ -40,7 +42,7 @@ async fn main() {
         query_pool.push(query_ref);
     }
 
-    let bind_addr = format!("{}:{}", app_config.host, app_config.port);
+    let bind_addr = format!("{}:{}", app_config.api_host, app_config.api_port);
     info!("Starting REST API on http://{}", bind_addr);
 
     let app = api::build_router(query_pool.clone());

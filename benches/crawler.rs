@@ -106,11 +106,11 @@ fn bench_scheduler_efficiency(c: &mut Criterion) {
 
     for i in 0..1000 {
         state
-            .frontier
+            .static_frontier
             .push_back(format!("https://{}/page_{}", domain, i));
     }
     state
-        .frontier
+        .static_frontier
         .push_back("https://available-domain.com/start".to_string());
 
     c.bench_function("scheduler_skip_delayed_urls", |b| {

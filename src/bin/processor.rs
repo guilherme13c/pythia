@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use pythia::actors::processor::actor::ProcessorActor;
 use pythia::config;
 use ractor::Actor;
@@ -20,7 +22,7 @@ async fn main() {
         app_config.cluster_port,
         app_config.cookie.clone(),
         app_config.node_name.clone(),
-        app_config.host.clone(),
+        app_config.cluster_host.clone(),
         None,
         None,
     );
@@ -32,11 +34,20 @@ async fn main() {
     if let Some(seed) = &app_config.seed_node
         && !seed.is_empty()
     {
-        let _ = ractor_cluster::client_connect(
-            &node_ref,
-            format!("{}:{}", seed, app_config.cluster_port),
-        )
-        .await;
+        let target = format!("{}:{}", seed, app_config.cluster_port);
+        tracing::info!("Attempting to connect to seed node: {}", target);
+
+        loop {
+            if ractor_cluster::client_connect(&node_ref, target.clone())
+                .await
+                .is_ok()
+            {
+                tracing::info!("Successfully connected to cluster!");
+                break;
+            }
+            tracing::warn!("Failed to connect to seed node, retrying in 2 seconds...");
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
     }
 
     let name = format!("processor-{}", uuid::Uuid::new_v4());

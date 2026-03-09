@@ -1,3 +1,4 @@
-pub mod actor;
+pub mod common;
+pub mod dynamic_worker;
 pub mod messages;
-pub mod state;
+pub mod static_worker;

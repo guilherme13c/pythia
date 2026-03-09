@@ -3,16 +3,19 @@ use std::fs;
 use uuid::Uuid;
 
 pub struct Config {
-    pub host: String,
-    pub port: u16,
+    pub cluster_host: String,
+    pub cluster_port: u16,
+    pub api_host: String,
+    pub api_port: u16,
     pub log_level: String,
-    pub workers_per_crawler_shard: usize,
+    pub static_workers_per_crawler_shard: usize,
+    pub enable_js_rendering: bool,
+    pub dynamic_workers_per_shard: usize,
     pub seeds_file: String,
     pub query_pool_size: usize,
     pub bloom_filter_capacity: usize,
     pub bloom_filter_fp_rate: f64,
     pub node_name: String,
-    pub cluster_port: u16,
     pub cookie: String,
     pub seed_node: Option<String>,
     pub shard_id: usize,
@@ -26,19 +29,31 @@ impl Config {
         }
 
         Self {
-            host: env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+            cluster_host: env::var("CLUSTER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
 
-            port: env::var("PORT")
+            api_host: env::var("API_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+
+            api_port: env::var("API_PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse()
-                .expect("PORT must be a valid number"),
+                .expect("API_PORT must be a valid number"),
 
             log_level: env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
 
-            workers_per_crawler_shard: env::var("WORKERS_PER_SHARD")
+            static_workers_per_crawler_shard: env::var("STATIC_WORKERS_PER_SHARD")
                 .unwrap_or_else(|_| "3".to_string())
                 .parse()
-                .expect("WORKERS_PER_CRAWLER_SHARD must be a valid number"),
+                .expect("STATIC_WORKERS_PER_SHARD must be a valid number"),
+
+            enable_js_rendering: std::env::var("ENABLE_JS_RENDERING")
+                .unwrap_or_else(|_| "false".to_string())
+                .parse()
+                .unwrap_or(false),
+
+            dynamic_workers_per_shard: std::env::var("DYNAMIC_WORKERS_PER_SHARD")
+                .unwrap_or_else(|_| "1".to_string())
+                .parse()
+                .unwrap_or(1),
 
             seeds_file: env::var("SEEDS_FILE").unwrap_or_else(|_| "seeds.txt".to_string()),
 
@@ -111,10 +126,13 @@ mod tests {
         writeln!(temp_file, "https://rust-lang.org").unwrap();
 
         let config = Config {
-            host: "127.0.0.1".to_string(),
-            port: 8080,
+            cluster_host: "127.0.0.1".to_string(),
+            api_host: "0.0.0.0".to_string(),
+            api_port: 8080,
             log_level: "info".to_string(),
-            workers_per_crawler_shard: 1,
+            static_workers_per_crawler_shard: 1,
+            enable_js_rendering: false,
+            dynamic_workers_per_shard: 1,
             seeds_file: temp_file.path().to_str().unwrap().to_string(),
             query_pool_size: 4,
             bloom_filter_capacity: 100000,
@@ -136,15 +154,19 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         unsafe {
-            env::remove_var("HOST");
-            env::remove_var("PORT");
+            env::remove_var("CLUSTER_HOST");
+            env::remove_var("CLUSTER_PORT");
+            env::remove_var("API_HOST");
+            env::remove_var("API_PORT");
             env::remove_var("QUERY_POOL_SIZE");
         }
 
         let config = Config::load();
 
-        assert_eq!(config.host, "0.0.0.0");
-        assert_eq!(config.port, 3000);
+        assert_eq!(config.api_host, "0.0.0.0");
+        assert_eq!(config.api_port, 3000);
+        assert_eq!(config.cluster_host, "0.0.0.0");
+        assert_eq!(config.cluster_port, 8000);
         assert_eq!(config.query_pool_size, 4);
     }
 }

@@ -1,12 +1,28 @@
-use axum::{
-    Json,
-    extract::{Query, State},
-};
+use axum::{Json, extract::Query, extract::State};
 use ractor::ActorRef;
 use rand::seq::IndexedRandom;
+use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use super::models::SearchParams;
+use crate::actors::crawler::worker::common;
 use crate::actors::query::messages::{ParsedQuery, QueryMessage, SearchResult};
+
+#[derive(Deserialize, Serialize)]
+pub struct CrawlParams {
+    pub url: String,
+}
+
+pub async fn crawl_handler(Json(params): Json<CrawlParams>) -> Json<String> {
+    info!("API received request to crawl: {}", params.url);
+
+    common::route_new_links(vec![params.url.clone()]);
+
+    Json(format!(
+        "Successfully routed {} to the crawler network!",
+        params.url
+    ))
+}
 
 pub async fn search_handler(
     State(query_pool): State<Vec<ActorRef<QueryMessage>>>,

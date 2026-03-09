@@ -16,7 +16,13 @@ impl ManagerActor {
         for url in urls {
             if !state.seen_urls.check(&url) {
                 state.seen_urls.set(&url);
-                state.frontier.push_back(url.clone());
+
+                if crate::actors::crawler::manager::state::is_spa_url(&url) {
+                    state.dynamic_frontier.push_back(url.clone());
+                } else {
+                    state.static_frontier.push_back(url.clone());
+                }
+
                 new_urls.push(url);
             }
         }
@@ -54,21 +60,39 @@ impl ManagerActor {
     }
 
     pub fn handle_request_work(&self, state: &mut ManagerState, worker_name: String) {
+        let is_dynamic_worker = worker_name.starts_with("dynamic-worker");
         let mut next_job = None;
         let mut skipped_urls = Vec::new();
-        let queue_len = state.frontier.len();
+
+        let queue_len = if is_dynamic_worker {
+            state.dynamic_frontier.len()
+        } else {
+            state.static_frontier.len()
+        };
 
         for _ in 0..queue_len {
-            if let Some(url_str) = state.frontier.pop_front()
-                && let Some(job) = self.evaluate_url(state, &url_str, &mut skipped_urls)
-            {
-                next_job = Some(job);
+            let url_opt = if is_dynamic_worker {
+                state.dynamic_frontier.pop_front()
+            } else {
+                state.static_frontier.pop_front()
+            };
+
+            if let Some(url_str) = url_opt {
+                if let Some(job) = self.evaluate_url(state, &url_str, &mut skipped_urls) {
+                    next_job = Some(job);
+                    break;
+                }
+            } else {
                 break;
             }
         }
 
         for skipped in skipped_urls.into_iter().rev() {
-            state.frontier.push_front(skipped);
+            if is_dynamic_worker {
+                state.dynamic_frontier.push_front(skipped);
+            } else {
+                state.static_frontier.push_front(skipped);
+            }
         }
 
         self.dispatch_job(worker_name, next_job);
@@ -97,7 +121,7 @@ impl ManagerActor {
 
         if !metadata.can_crawl(parsed_url.path()) {
             debug!("Dropped URL due to robots.txt Disallow: {}", url_str);
-            return None; // Drop permanently
+            return None;
         }
 
         let now = Instant::now();
@@ -143,7 +167,11 @@ impl ManagerActor {
 
         metadata.backoff_until = Some(Instant::now() + Duration::from_secs(backoff_secs));
 
-        state.frontier.push_front(url);
+        if crate::actors::crawler::manager::state::is_spa_url(&url) {
+            state.dynamic_frontier.push_front(url);
+        } else {
+            state.static_frontier.push_front(url);
+        }
 
         warn!(
             "Domain {} gave a 429! Backing off for {} seconds.",
@@ -192,13 +220,14 @@ impl Actor for ManagerActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("received message: {:?}", message);
         match message {
             ManagerMessage::AddUrls(urls) => {
                 self.handle_add_urls(state, urls);
             }
             ManagerMessage::UpdateDomainRules(domain, robots_txt) => {
                 let metadata = if let Some(txt) = robots_txt {
-                    crate::actors::crawler::worker::actor::parse_robots_txt(&txt, &domain)
+                    crate::actors::crawler::worker::common::parse_robots_txt(&txt, &domain)
                 } else {
                     let mut m = DomainMetadata::default_unfetched();
                     m.rules_fetched = true;
@@ -237,7 +266,7 @@ mod tests {
 
         manager.handle_add_urls(&mut state, new_urls);
 
-        assert_eq!(state.frontier.len(), 2);
+        assert_eq!(state.static_frontier.len(), 2);
         assert!(
             state
                 .seen_urls
@@ -270,7 +299,7 @@ mod tests {
         let metadata = state.domain_metadata.get(&domain).unwrap();
         assert_eq!(metadata.consecutive_errors, 3);
 
-        assert_eq!(state.frontier.len(), 3);
+        assert_eq!(state.static_frontier.len(), 3);
     }
 
     #[test]
@@ -321,7 +350,6 @@ mod tests {
             _ => panic!("Expected FetchRobotsTxt"),
         }
 
-        // It should have safely stored the original URL in the skipped list to try again later
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0], "https://example.com/page");
     }

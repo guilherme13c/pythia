@@ -8,7 +8,8 @@ use tokio::time::Instant;
 const DEFAULT_CRAWL_DELAY: Duration = Duration::from_secs(2);
 
 pub struct ManagerState {
-    pub frontier: VecDeque<String>,
+    pub static_frontier: VecDeque<String>,
+    pub dynamic_frontier: VecDeque<String>,
     pub seen_urls: Bloom<String>,
     pub domain_metadata: HashMap<String, DomainMetadata>,
     pub db: Connection,
@@ -88,7 +89,8 @@ impl ManagerState {
         )
         .expect("Failed to create urls table");
 
-        let mut frontier = VecDeque::new();
+        let mut static_frontier = VecDeque::new();
+        let mut dynamic_frontier = VecDeque::new();
         let mut seen_urls =
             Bloom::new_for_fp_rate(capacity, fp_rate).expect("Failed to create bloomfilter");
 
@@ -103,16 +105,50 @@ impl ManagerState {
             for (url, status) in url_iter.flatten() {
                 seen_urls.set(&url);
                 if status == "pending" {
-                    frontier.push_back(url);
+                    if is_spa_url(&url) {
+                        dynamic_frontier.push_back(url);
+                    } else {
+                        static_frontier.push_back(url);
+                    }
                 }
             }
         }
 
         Self {
-            frontier,
+            static_frontier,
+            dynamic_frontier,
             seen_urls,
             domain_metadata: HashMap::new(),
             db,
         }
+    }
+}
+
+pub fn is_spa_url(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.contains("#!")
+        || lower.contains("/app/")
+        || lower.contains("app.")
+        || lower.contains("dashboard.")
+        || lower.contains("portal.")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_spa_url() {
+        assert!(is_spa_url("https://example.com/app/dashboard"));
+        assert!(is_spa_url("https://portal.example.com/login"));
+        assert!(is_spa_url("https://my.app.com/settings"));
+        assert!(is_spa_url("https://example.com/#!/home"));
+
+        assert!(!is_spa_url("https://example.com/about-us"));
+        assert!(!is_spa_url("https://blog.example.com/article-1"));
+        assert!(!is_spa_url(
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        ));
+        assert!(!is_spa_url("https://apple.com/iphone"));
     }
 }
