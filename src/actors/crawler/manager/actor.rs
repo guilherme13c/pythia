@@ -220,6 +220,7 @@ impl Actor for ManagerActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("received message: {:?}", message);
         match message {
             ManagerMessage::AddUrls(urls) => {
                 self.handle_add_urls(state, urls);

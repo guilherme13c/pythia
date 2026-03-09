@@ -145,6 +145,7 @@ impl Actor for WorkerActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("received message: {:?}", message);
         match message {
             WorkerMessage::Fetch(url_str) => self.handle_fetch(state, myself, url_str).await,
             WorkerMessage::FetchRobotsTxt(domain, url) => {

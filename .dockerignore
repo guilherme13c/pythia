@@ -4,3 +4,4 @@ benches/
 **/*.rs.bk
 .env
 local.env
+/.models

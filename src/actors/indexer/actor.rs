@@ -284,6 +284,7 @@ impl Actor for IndexerActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("received message: {:?}", message);
         match message {
             IndexerMessage::StoreChunks(url, title, description, chunks, vectors) => {
                 self.handle_store_chunks(state, url, title, description, chunks, vectors)

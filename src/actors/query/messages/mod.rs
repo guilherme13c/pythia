@@ -32,6 +32,7 @@ pub enum QueryNetworkMessage {
     },
 }
 
+#[derive(Debug)]
 pub enum QueryMessage {
     Query(ParsedQuery, usize, usize, RpcReplyPort<Vec<SearchResult>>),
     Network(QueryNetworkMessage),

@@ -1,4 +1,4 @@
-use axum::{Router, routing::get};
+use axum::{Router, routing::get, routing::post};
 use ractor::ActorRef;
 use std::sync::Arc;
 use tower_governor::{
@@ -23,6 +23,7 @@ pub fn build_router(query_pool: Vec<ActorRef<QueryMessage>>) -> Router {
     Router::new()
         .route("/health", get(handlers::health_handler))
         .route("/search", get(handlers::search_handler))
+        .route("/crawl", post(handlers::crawl_handler))
         .layer(GovernorLayer::new(governor_conf))
         .with_state(query_pool)
 }

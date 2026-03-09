@@ -170,8 +170,14 @@ impl Actor for ProcessorActor {
         ractor::pg::join("processors".to_string(), vec![myself.clone().into()]);
         info!("Processor Actor starting. Loading AI Embedding Model...");
 
+        let model = tokio::task::spawn_blocking(|| Self::initialize_model())
+            .await
+            .expect("Failed to initialize embedding model");
+
+        ractor::pg::join("processors".to_string(), vec![myself.clone().into()]);
+
         Ok(ProcessorState {
-            embedding_model: Arc::new(std::sync::Mutex::new(Self::initialize_model())),
+            embedding_model: Arc::new(std::sync::Mutex::new(model)),
         })
     }
 
@@ -181,6 +187,7 @@ impl Actor for ProcessorActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("received message: {:?}", message);
         match message {
             ProcessorMessage::ProcessDocument(url, raw_text, title, description) => {
                 self.handle_process_document(state, url, raw_text, title, description)

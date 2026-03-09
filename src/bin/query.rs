@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use pythia::actors::query::actor::QueryActor;
 use pythia::api;
 use pythia::config;

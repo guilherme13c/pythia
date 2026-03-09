@@ -245,6 +245,7 @@ impl Actor for QueryActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        info!("received message: {:?}", message);
         match message {
             QueryMessage::Query(parsed_query, limit, offset, reply) => {
                 let request_id = uuid::Uuid::new_v4().to_string();

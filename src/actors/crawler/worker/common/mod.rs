@@ -6,7 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::debug;
+use tracing::{debug, error, info};
 use url::Url;
 
 use crate::actors::crawler::manager::messages::ManagerMessage;
@@ -257,12 +257,23 @@ pub fn send_to_processor(
     let processors = ractor::pg::get_members(&"processors".to_string());
     if let Some(cell) = processors.choose(&mut rand::rng()) {
         let processor_ref: ActorRef<ProcessorMessage> = cell.clone().into();
-        let _ = processor_ref.cast(ProcessorMessage::ProcessDocument(
-            url,
+        match processor_ref.cast(ProcessorMessage::ProcessDocument(
+            url.clone(),
             raw_text,
             title,
             description,
-        ));
+        )) {
+            Ok(_) => info!("Successfully dispatched document to processor: {}", url),
+            Err(e) => error!(
+                "Failed to cast document to network processor {}: {:?}",
+                url, e
+            ),
+        }
+    } else {
+        error!(
+            "Dropped document {} because the 'processors' process group is empty!",
+            url
+        );
     }
 }
 

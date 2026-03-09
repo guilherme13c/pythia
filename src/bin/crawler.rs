@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use pythia::actors::crawler::manager::actor::ManagerActor;
 use pythia::actors::crawler::manager::messages::ManagerMessage;
 use pythia::actors::crawler::worker::dynamic_worker::actor::DynamicWorkerActor;
@@ -35,12 +37,20 @@ async fn main() {
     if let Some(seed) = &app_config.seed_node
         && !seed.is_empty()
     {
-        info!("Connecting to seed node: {}", seed);
-        let _ = ractor_cluster::client_connect(
-            &node_ref,
-            format!("{}:{}", seed, app_config.cluster_port),
-        )
-        .await;
+        let target = format!("{}:{}", seed, app_config.cluster_port);
+        tracing::info!("Attempting to connect to seed node: {}", target);
+
+        loop {
+            if ractor_cluster::client_connect(&node_ref, target.clone())
+                .await
+                .is_ok()
+            {
+                tracing::info!("Successfully connected to cluster!");
+                break;
+            }
+            tracing::warn!("Failed to connect to seed node, retrying in 2 seconds...");
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
     }
 
     let shard_idx = app_config.shard_id;
@@ -71,9 +81,14 @@ async fn main() {
     }
 
     if shard_idx == 0 {
-        info!("Shard 0 injecting seed URLs...");
+        let manager_ref_clone = manager_ref.clone();
         let seeds = app_config.load_seeds();
-        let _ = manager_ref.cast(ManagerMessage::AddUrls(seeds));
+        tokio::spawn(async move {
+            tracing::info!("Waiting 15 seconds for cluster to stabilize...");
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            tracing::info!("Shard 0 injecting seed URLs...");
+            let _ = manager_ref_clone.cast(ManagerMessage::AddUrls(seeds));
+        });
     }
 
     tokio::signal::ctrl_c().await.unwrap();
