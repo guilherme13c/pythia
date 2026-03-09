@@ -1,7 +1,0 @@
-target/
-benches/
-.cargo/
-**/*.rs.bk
-.env
-local.env
-/.models
