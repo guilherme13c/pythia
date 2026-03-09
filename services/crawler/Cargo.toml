@@ -1,0 +1,20 @@
+[package]
+name = "crawler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+shared = { workspace = true }
+ractor = { workspace = true }
+reqwest = { workspace = true }
+scraper = { workspace = true }
+url = { workspace = true }
+rusqlite = { workspace = true }
+bloomfilter = { workspace = true }
+uuid = { workspace = true }
+headless_chrome = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }

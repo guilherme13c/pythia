@@ -1,0 +1,17 @@
+[package]
+name = "processor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+shared = { workspace = true }
+ractor = { workspace = true }
+fastembed = { workspace = true }
+scraper = { workspace = true }
+quick-xml = { workspace = true }
+lopdf = { workspace = true }
+pdf-extract = { workspace = true }
+url = { workspace = true }
+axum = { workspace = true }

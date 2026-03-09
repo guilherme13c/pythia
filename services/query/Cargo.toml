@@ -1,0 +1,12 @@
+[package]
+name = "query"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+shared = { workspace = true }
+axum = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
