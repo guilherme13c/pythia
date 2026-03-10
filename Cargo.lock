@@ -1061,6 +1061,8 @@ dependencies = [
  "axum",
  "bloomfilter",
  "headless_chrome",
+ "lopdf 0.39.0",
+ "quick-xml",
  "ractor",
  "reqwest",
  "rusqlite",

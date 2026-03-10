@@ -1,6 +1,9 @@
 use headless_chrome::Browser;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use reqwest::Client;
+use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use url::Url;
 
@@ -24,6 +27,14 @@ pub struct WorkerState {
     pub blob_storage: Arc<dyn BlobStorage>,
     pub publisher: Arc<dyn DocumentPublisher>,
     pub worker_type: WorkerType,
+    pub shard_idx: usize,
+    pub total_shards: usize,
+}
+
+pub fn get_shard_index(domain: &str, num_shards: usize) -> usize {
+    let mut hasher = DefaultHasher::new();
+    domain.hash(&mut hasher);
+    (hasher.finish() as usize) % num_shards
 }
 
 enum FetchResult {
@@ -35,6 +46,13 @@ enum FetchResult {
 pub struct WorkerActor;
 
 impl WorkerActor {
+    fn send_to_manager_shard(&self, shard_idx: usize, msg: ManagerMessage) {
+        if let Some(manager_cell) = ractor::registry::where_is(format!("manager-{}", shard_idx)) {
+            let manager_ref: ActorRef<ManagerMessage> = manager_cell.into();
+            let _ = manager_ref.cast(msg);
+        }
+    }
+
     async fn execute_fetch(&self, state: &WorkerState, url: &str) -> FetchResult {
         match &state.worker_type {
             WorkerType::Static => match state.http_client.get(url).send().await {
@@ -106,10 +124,21 @@ impl WorkerActor {
 
         match self.execute_fetch(state, &url).await {
             FetchResult::Success { content, mime_type } => {
-                if mime_type.contains("text/html") {
-                    if let Ok(html_str) = String::from_utf8(content.clone()) {
-                        let links = extract::extract_links(&html_str, &url);
-                        self.send_to_manager(ManagerMessage::AddUrls(links));
+                let links = extract::extract_links(&content, &mime_type, &url);
+                if !links.is_empty() {
+                    let mut routed_batches: HashMap<usize, Vec<String>> = HashMap::new();
+                    for link in links {
+                        if let Ok(parsed) = Url::parse(&link) {
+                            let link_domain = parsed.host_str().unwrap_or("").to_string();
+                            if !link_domain.is_empty() {
+                                let shard = get_shard_index(&link_domain, state.total_shards);
+                                routed_batches.entry(shard).or_default().push(link);
+                            }
+                        }
+                    }
+
+                    for (shard, urls) in routed_batches {
+                        self.send_to_manager_shard(shard, ManagerMessage::AddUrls(urls));
                     }
                 }
 
@@ -121,13 +150,18 @@ impl WorkerActor {
                             mime_type,
                         };
                         let _ = state.publisher.publish(msg).await;
-                        self.send_to_manager(ManagerMessage::CrawlSuccess(domain, url));
+                        let shard = get_shard_index(&domain, state.total_shards);
+                        self.send_to_manager_shard(
+                            shard,
+                            ManagerMessage::CrawlSuccess(domain.clone(), url),
+                        );
                     }
                     Err(e) => eprintln!("Failed to save blob: {}", e),
                 }
             }
             FetchResult::RateLimited => {
-                self.send_to_manager(ManagerMessage::DomainRateLimited(domain, url));
+                let shard = get_shard_index(&domain, state.total_shards);
+                self.send_to_manager_shard(shard, ManagerMessage::DomainRateLimited(domain, url));
             }
             FetchResult::Error(e) => {
                 eprintln!("Failed to fetch {}: {:?}", url, e);
@@ -135,7 +169,10 @@ impl WorkerActor {
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        self.send_to_manager(ManagerMessage::RequestWork(myself.get_name().unwrap()));
+        self.send_to_manager_shard(
+            state.shard_idx,
+            ManagerMessage::RequestWork(myself.get_name().unwrap()),
+        );
     }
 
     async fn handle_fetch_robots(
@@ -151,15 +188,15 @@ impl WorkerActor {
             _ => None,
         };
 
-        self.send_to_manager(ManagerMessage::UpdateDomainRules(domain, robots_txt));
-        self.send_to_manager(ManagerMessage::RequestWork(myself.get_name().unwrap()));
-    }
-
-    fn send_to_manager(&self, msg: ManagerMessage) {
-        if let Some(manager_cell) = ractor::registry::where_is("manager".to_string()) {
-            let manager_ref: ActorRef<ManagerMessage> = manager_cell.into();
-            let _ = manager_ref.cast(msg);
-        }
+        let shard = get_shard_index(&domain, state.total_shards);
+        self.send_to_manager_shard(
+            shard,
+            ManagerMessage::UpdateDomainRules(domain.clone(), robots_txt),
+        );
+        self.send_to_manager_shard(
+            state.shard_idx,
+            ManagerMessage::RequestWork(myself.get_name().unwrap()),
+        );
     }
 }
 
@@ -230,6 +267,8 @@ mod tests {
             blob_storage: Arc::new(MockBlobStorage),
             publisher: Arc::new(MockPublisher),
             worker_type: WorkerType::Static,
+            shard_idx: 0,
+            total_shards: 1,
         }
     }
 

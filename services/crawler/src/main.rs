@@ -1,6 +1,7 @@
 use ractor::Actor;
 use std::sync::Arc;
 use tokio::time::Duration;
+use url::Url;
 
 pub mod communication;
 pub mod data;
@@ -12,7 +13,7 @@ use data::frontier::ManagerState;
 use logic::manager::{ManagerActor, ManagerMessage};
 
 use headless_chrome::{Browser, LaunchOptions};
-use logic::worker::{WorkerActor, WorkerState, WorkerType};
+use logic::worker::{WorkerActor, WorkerState, WorkerType, get_shard_index};
 
 #[tokio::main]
 async fn main() {
@@ -21,14 +22,24 @@ async fn main() {
     let blob_storage = Arc::new(MockBlobStorage);
     let publisher = Arc::new(MockPublisher);
 
-    let manager_state = ManagerState::with_db(":memory:", 10_000, 0.01);
+    let total_shards = 3;
+    let mut manager_refs = Vec::new();
 
-    let (manager_ref, _) = Actor::spawn(Some("manager".to_string()), ManagerActor, manager_state)
-        .await
-        .unwrap();
+    for i in 0..total_shards {
+        let manager_state = ManagerState::with_db(":memory:", 10_000, 0.01);
+        let manager_name = format!("manager-{}", i);
 
-    for i in 1..=3 {
+        let (manager_ref, _) = Actor::spawn(Some(manager_name), ManagerActor, manager_state)
+            .await
+            .unwrap();
+
+        manager_refs.push(manager_ref);
+    }
+
+    let num_workers = 3;
+    for i in 1..=num_workers {
         let worker_name = format!("worker-{}", i);
+        let shard_idx = i % total_shards;
 
         let worker_type = if i == 1 {
             let browser = Browser::new(
@@ -48,20 +59,31 @@ async fn main() {
             blob_storage: blob_storage.clone(),
             publisher: publisher.clone(),
             worker_type,
+            shard_idx,
+            total_shards,
         };
 
         Actor::spawn(Some(worker_name.clone()), WorkerActor, worker_state)
             .await
             .unwrap();
 
-        let _ = manager_ref.cast(ManagerMessage::RequestWork(worker_name));
+        let _ = manager_refs[shard_idx].cast(ManagerMessage::RequestWork(worker_name));
     }
 
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let _ = manager_ref.cast(ManagerMessage::AddUrls(vec![
+
+    let seed_urls = vec![
         "https://www.rust-lang.org/".to_string(),
         "https://tokio.rs/".to_string(),
-    ]));
+    ];
+
+    for url in seed_urls {
+        if let Ok(parsed) = Url::parse(&url) {
+            let domain = parsed.host_str().unwrap_or("");
+            let shard = get_shard_index(domain, total_shards);
+            let _ = manager_refs[shard].cast(ManagerMessage::AddUrls(vec![url]));
+        }
+    }
 
     tokio::signal::ctrl_c().await.unwrap();
     println!("Shutting down Crawler Service...");
