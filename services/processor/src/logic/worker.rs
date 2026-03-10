@@ -1,5 +1,6 @@
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::Arc;
+use tracing::{error, info, warn};
 
 use crate::communication::publisher::{VectorMessage, VectorPublisher};
 use crate::data::blob_storage::BlobStorageReader;
@@ -30,18 +31,18 @@ impl ProcessorActor {
         blob_id: String,
         mime_type: String,
     ) {
-        println!(
+        info!(
             "⚙️ [Logic Layer] Processing document: {} (Blob: {})",
             url, blob_id
         );
 
         let Ok(bytes) = state.blob_reader.read_blob(&blob_id).await else {
-            eprintln!("Failed to read blob {}: {}", blob_id, url);
+            error!("Failed to read blob {}: {}", blob_id, url);
             return;
         };
 
         let Ok(document) = extract::parse_document(&bytes, &mime_type, &url) else {
-            eprintln!("Failed to parse document {}", url);
+            error!("Failed to parse document {}", url);
             return;
         };
 
@@ -49,13 +50,13 @@ impl ProcessorActor {
         let chunks = TextChunker::chunk_text(&clean_text, CHUNK_MAX_WORDS, CHUNK_OVERLAP_SENTENCES);
 
         if chunks.is_empty() {
-            println!("⚠️ Document {} resulted in 0 chunks. Skipping.", url);
+            warn!("Document {} resulted in 0 chunks. Skipping.", url);
             return;
         }
 
-        println!("🧠 Embedding {} chunks for {}...", chunks.len(), url);
+        info!("Embedding {} chunks for {}...", chunks.len(), url);
         let Ok(embeddings) = state.embedder.embed_chunks(chunks.clone()) else {
-            eprintln!("Failed to generate embeddings for {}", url);
+            error!("Failed to generate embeddings for {}", url);
             return;
         };
 
@@ -68,7 +69,7 @@ impl ProcessorActor {
         };
 
         if let Err(e) = state.publisher.publish(msg).await {
-            eprintln!("Failed to publish vectors: {}", e);
+            error!("Failed to publish vectors: {}", e);
         }
     }
 }
@@ -83,7 +84,7 @@ impl Actor for ProcessorActor {
         _myself: ActorRef<Self::Msg>,
         state: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        println!("🚀 Processor Actor Started!");
+        info!("Processor Actor Started!");
         Ok(state)
     }
 

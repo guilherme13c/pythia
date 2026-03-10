@@ -1,32 +1,41 @@
 use ractor::Actor;
 use std::sync::Arc;
 use tokio::time::Duration;
+use tracing::info;
 use url::Url;
 
 pub mod communication;
+pub mod config;
 pub mod data;
 pub mod logic;
 
 use communication::publisher::MockPublisher;
+use config::CrawlerConfig;
 use data::blob_storage::MockBlobStorage;
 use data::frontier::ManagerState;
-use logic::manager::{ManagerActor, ManagerMessage};
-
 use headless_chrome::{Browser, LaunchOptions};
+use logic::manager::{ManagerActor, ManagerMessage};
 use logic::worker::{WorkerActor, WorkerState, WorkerType, get_shard_index};
 
 #[tokio::main]
 async fn main() {
-    println!("🚀 Bootstrapping Crawler Service...");
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    info!("🚀 Bootstrapping Crawler Service...");
+
+    let config = CrawlerConfig::load();
 
     let blob_storage = Arc::new(MockBlobStorage);
     let publisher = Arc::new(MockPublisher);
 
-    let total_shards = 3;
     let mut manager_refs = Vec::new();
 
-    for i in 0..total_shards {
-        let manager_state = ManagerState::with_db(":memory:", 10_000, 0.01);
+    for i in 0..config.total_shards {
+        let manager_state = ManagerState::with_db(&config.db_path, 10_000, 0.01);
         let manager_name = format!("manager-{}", i);
 
         let (manager_ref, _) = Actor::spawn(Some(manager_name), ManagerActor, manager_state)
@@ -36,10 +45,9 @@ async fn main() {
         manager_refs.push(manager_ref);
     }
 
-    let num_workers = 3;
-    for i in 1..=num_workers {
+    for i in 1..=config.num_workers {
         let worker_name = format!("worker-{}", i);
-        let shard_idx = i % total_shards;
+        let shard_idx = i % config.total_shards;
 
         let worker_type = if i == 1 {
             let browser = Browser::new(
@@ -60,7 +68,7 @@ async fn main() {
             publisher: publisher.clone(),
             worker_type,
             shard_idx,
-            total_shards,
+            total_shards: config.total_shards,
         };
 
         Actor::spawn(Some(worker_name.clone()), WorkerActor, worker_state)
@@ -72,19 +80,14 @@ async fn main() {
 
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let seed_urls = vec![
-        "https://www.rust-lang.org/".to_string(),
-        "https://tokio.rs/".to_string(),
-    ];
-
-    for url in seed_urls {
+    for url in config.seed_urls {
         if let Ok(parsed) = Url::parse(&url) {
             let domain = parsed.host_str().unwrap_or("");
-            let shard = get_shard_index(domain, total_shards);
+            let shard = get_shard_index(domain, config.total_shards);
             let _ = manager_refs[shard].cast(ManagerMessage::AddUrls(vec![url]));
         }
     }
 
     tokio::signal::ctrl_c().await.unwrap();
-    println!("Shutting down Crawler Service...");
+    info!("Shutting down Crawler Service...");
 }

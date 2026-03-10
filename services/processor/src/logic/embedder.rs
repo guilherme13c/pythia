@@ -1,5 +1,4 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use std::env;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -93,15 +92,10 @@ pub struct Embedder {
 }
 
 impl Embedder {
-    fn get_cache_dir() -> PathBuf {
-        let path = env::var("FASTEMBED_CACHE_PATH")
-            .unwrap_or_else(|_| ".local_models/fastembed".to_string());
-        PathBuf::from(path)
-    }
-
-    pub fn new() -> Result<Self, String> {
+    pub fn new(cache_dir: String) -> Result<Self, String> {
         let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(Self::get_cache_dir()),
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+                .with_cache_dir(PathBuf::from(cache_dir)),
         )
         .map_err(|e| format!("Failed to load fastembed model: {:?}", e))?;
 

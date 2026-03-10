@@ -4,6 +4,7 @@ use crate::logic::worker::WorkerMessage;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::time::Duration;
 use tokio::time::Instant;
+use tracing::{info, warn};
 use url::Url;
 
 pub enum ManagerMessage {
@@ -166,7 +167,7 @@ impl ManagerActor {
         metadata.backoff_until = Some(Instant::now() + Duration::from_secs(backoff_secs));
 
         state.static_frontier.push_front(url);
-        println!(
+        warn!(
             "⚠️ Rate limited on {}. Backing off for {}s",
             domain, backoff_secs
         );
@@ -183,7 +184,7 @@ impl Actor for ManagerActor {
         _myself: ActorRef<Self::Msg>,
         state: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        println!("🕷️ [Logic Layer] Manager Actor started!");
+        info!("[Logic Layer] Manager Actor started!");
         Ok(state)
     }
 

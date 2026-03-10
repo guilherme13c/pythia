@@ -1060,6 +1060,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bloomfilter",
+ "dotenvy",
  "headless_chrome",
  "lopdf 0.39.0",
  "quick-xml",
@@ -1070,6 +1071,8 @@ dependencies = [
  "serde",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]
@@ -2019,6 +2022,12 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "downcast-rs"
@@ -3246,12 +3255,15 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "axum",
+ "dotenvy",
  "futures",
  "lancedb",
  "ractor",
  "serde",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -5188,6 +5200,7 @@ name = "processor"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dotenvy",
  "fastembed",
  "lopdf 0.39.0",
  "pdf-extract",
@@ -5197,6 +5210,8 @@ dependencies = [
  "serde",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
@@ -5290,11 +5305,14 @@ name = "query"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dotenvy",
  "reqwest",
  "serde",
  "serde_json",
  "shared",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

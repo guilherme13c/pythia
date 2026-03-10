@@ -1,16 +1,19 @@
+pub mod config;
+pub mod logic;
+
 use axum::{
     Json, Router,
     extract::{Query, State},
     http::StatusCode,
     routing::get,
 };
+use config::QueryConfig;
+use logic::client::SearchClient;
 use serde::Deserialize;
 use shared::models::SearchResult;
 use std::env;
 use std::sync::Arc;
-
-pub mod logic;
-use logic::client::SearchClient;
+use tracing::{error, info};
 
 #[derive(Deserialize)]
 struct SearchParams {
@@ -24,12 +27,9 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    let processor_url =
-        env::var("PROCESSOR_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
-    let indexer_url =
-        env::var("INDEXER_URL").unwrap_or_else(|_| "http://localhost:3002".to_string());
+    let config = QueryConfig::load();
 
-    let client = SearchClient::new(processor_url, indexer_url);
+    let client = SearchClient::new(config.processor_url, config.indexer_url);
     let state = Arc::new(AppState { client });
 
     let app = Router::new()
@@ -37,12 +37,12 @@ async fn main() {
         .with_state(state);
 
     let port = env::var("PORT").unwrap_or_else(|_| "4000".to_string());
-    let bind_addr = format!("0.0.0.0:{}", port);
+    let bind_addr = format!("0.0.0.0:{}", config.port);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
-    println!(
-        "🔍 Query API ready on http://localhost:{}/search?q=your+query",
-        port
+    info!(
+        "Query API ready on http://localhost:{}/search?q=your+query",
+        config.port
     );
     axum::serve(listener, app).await.unwrap();
 }
@@ -63,7 +63,7 @@ async fn search_handler(
     match state.client.perform_search(&params.q, limit).await {
         Ok(results) => Ok(Json(results)),
         Err(e) => {
-            eprintln!("Search failed: {}", e);
+            error!("Search failed: {}", e);
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal server error during search execution".to_string(),

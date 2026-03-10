@@ -1,3 +1,5 @@
 .local_models/
 target/
+data/
+*/target/
 

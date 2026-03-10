@@ -2,6 +2,7 @@ use ractor::Actor;
 use std::sync::Arc;
 
 pub mod communication;
+pub mod config;
 pub mod data;
 pub mod logic;
 
@@ -11,9 +12,11 @@ use axum::{
     routing::post,
 };
 use communication::publisher::MockVectorPublisher;
+use config::ProcessorConfig;
 use data::blob_storage::MockBlobStorageReader;
 use logic::embedder::Embedder;
 use logic::worker::{ProcessorActor, ProcessorState};
+use tracing::info;
 
 #[derive(serde::Deserialize)]
 struct EmbedRequest {
@@ -38,11 +41,13 @@ async fn handle_embed(
 
 #[tokio::main]
 async fn main() {
-    println!("🚀 Bootstrapping Processor Service...");
+    info!("Bootstrapping Processor Service...");
 
-    println!("⏳ Loading FastEmbed model (this might take a few seconds)...");
-    let embedder = Embedder::new().expect("Failed to initialize FastEmbed");
-    println!("✅ FastEmbed model loaded!");
+    let config = ProcessorConfig::load();
+
+    info!("Loading FastEmbed model (this might take a few seconds)...");
+    let embedder = Embedder::new(config.cache_path).expect("Failed to initialize FastEmbed");
+    info!("FastEmbed model loaded!");
 
     let blob_reader = Arc::new(MockBlobStorageReader);
     let publisher = Arc::new(MockVectorPublisher);
@@ -67,7 +72,8 @@ async fn main() {
         .route("/embed", post(handle_embed))
         .with_state(embedder.clone());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await.unwrap();
-    println!("📡 Processor API listening on port 3001");
+    let bind_addr = format!("0.0.0.0:{}", config.port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
+    info!("Processor API listening on port {}", config.port);
     axum::serve(listener, app).await.unwrap();
 }

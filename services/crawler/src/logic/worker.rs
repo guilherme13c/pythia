@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use tracing::{error, info};
 use url::Url;
 
 use crate::communication::publisher::{DocumentMessage, DocumentPublisher};
@@ -126,7 +127,7 @@ impl WorkerActor {
             WorkerType::Static => "Static",
             WorkerType::Dynamic(_) => "Dynamic",
         };
-        println!("🕸️ [Logic Layer] Worker fetching: {} ({})", url, mode_str);
+        info!("[Logic Layer] Worker fetching: {} ({})", url, mode_str);
 
         let domain = Url::parse(&url)
             .map(|u| u.host_str().unwrap_or("").to_string())
@@ -142,7 +143,7 @@ impl WorkerActor {
                 self.send_to_manager_shard(shard, ManagerMessage::DomainRateLimited(domain, url));
             }
             FetchResult::Error(e) => {
-                eprintln!("Failed to fetch {}: {:?}", url, e);
+                error!("Failed to fetch {}: {:?}", url, e);
             }
         }
 
@@ -180,7 +181,7 @@ impl WorkerActor {
                     ManagerMessage::CrawlSuccess(domain.to_string(), url.to_string()),
                 );
             }
-            Err(e) => eprintln!("Failed to save blob: {}", e),
+            Err(e) => error!("Failed to save blob: {}", e),
         }
     }
 
@@ -208,7 +209,7 @@ impl WorkerActor {
         domain: String,
         url: String,
     ) {
-        println!("🤖 [Logic Layer] Fetching rules for: {}", domain);
+        info!("[Logic Layer] Fetching rules for: {}", domain);
         let robots_txt = match state.http_client.get(&url).send().await {
             Ok(response) if response.status().is_success() => response.text().await.ok(),
             _ => None,

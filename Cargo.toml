@@ -28,6 +28,9 @@ lance-index = "2.0.0"
 arrow-array = "57.3.0"
 arrow-schema = "57.3.0"
 arrow-cast = "57.3.0"
+dotenvy = "0.15.7"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
 # Shared Internal Lib
 shared = { path = "libs/shared" }

@@ -2,6 +2,7 @@ use crate::data::lancedb_store::LanceDbStore;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use shared::models::SearchResult;
 use std::sync::Arc;
+use tracing::{error, info};
 
 pub enum IndexerMessage {
     Store {
@@ -47,8 +48,8 @@ impl IndexerActor {
             .await;
 
         match result {
-            Ok(_) => println!("✅ Indexed {} chunks for {}", chunk_count, url),
-            Err(e) => eprintln!("❌ Database insertion error for {}: {}", url, e),
+            Ok(_) => info!("Indexed {} chunks for {}", chunk_count, url),
+            Err(e) => error!("Database insertion error for {}: {}", url, e),
         }
     }
 
