@@ -1,5 +1,4 @@
 .local_models/
 target/
-data/
 */target/
-
+libs/shared/data/

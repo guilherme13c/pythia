@@ -144,3 +144,52 @@ impl SearchClient {
         Ok(rerank_resp.scores)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockito::Server;
+
+    #[test]
+    fn test_client_initialization() {
+        let client = SearchClient::new(
+            "http://processor:3001".to_string(), 
+            "http://indexer:3002".to_string()
+        );
+        assert_eq!(client.processor_url, "http://processor:3001");
+        assert_eq!(client.indexer_url, "http://indexer:3002");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_embedding_network_error() {
+        let client = SearchClient::new(
+            "http://localhost:65000".to_string(), 
+            "http://localhost:65000".to_string()
+        );
+        
+        let result = client.fetch_embedding("test query").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to contact processor"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_search_results_handles_indexer_errors() {
+        let mut server = Server::new_async().await;
+        
+        let _mock = server.mock("POST", "/search")
+            .with_status(500)
+            .create_async()
+            .await;
+
+        let client = SearchClient::new(
+            "http://localhost:3001".to_string(), 
+            server.url(),
+        );
+
+        let dummy_vector = vec![0.1; 384];
+        let result = client.fetch_search_results(dummy_vector, 5).await;
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Indexer API error: 500"));
+    }
+}

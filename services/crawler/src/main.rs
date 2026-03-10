@@ -1,9 +1,10 @@
-use crawler::communication::publisher::MockPublisher;
+use crawler::communication::publisher::RabbitMqPublisher;
 use crawler::config::CrawlerConfig;
-use crawler::data::blob_storage::MockBlobStorage;
-use crawler::data::frontier::ManagerState;
-use crawler::logic::manager::{ManagerActor, ManagerMessage};
-use crawler::logic::worker::{WorkerActor, WorkerState, WorkerType, get_shard_index};
+use crawler::data::{blob_storage::DbBlobStorage, frontier::ManagerState};
+use crawler::logic::{
+    manager::{ManagerActor, ManagerMessage},
+    worker::{WorkerActor, WorkerState, WorkerType, get_shard_index},
+};
 use headless_chrome::{Browser, LaunchOptions};
 use ractor::Actor;
 use std::sync::Arc;
@@ -19,12 +20,17 @@ async fn main() {
         )
         .init();
 
-    info!("🚀 Bootstrapping Crawler Service...");
+    info!("Bootstrapping Crawler Service...");
 
     let config = CrawlerConfig::load();
 
-    let blob_storage = Arc::new(MockBlobStorage);
-    let publisher = Arc::new(MockPublisher);
+    let blob_storage =
+        Arc::new(DbBlobStorage::new(&config.blob_db_path).expect("Failed to init blob DB"));
+    let publisher = Arc::new(
+        RabbitMqPublisher::new(&config.amqp_addr)
+            .await
+            .expect("Failed to connect to RabbitMQ"),
+    );
 
     let mut manager_refs = Vec::new();
 

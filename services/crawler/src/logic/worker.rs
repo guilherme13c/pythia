@@ -1,3 +1,7 @@
+use crate::communication::publisher::{DocumentMessage, DocumentPublisher};
+use crate::data::blob_storage::BlobStorage;
+use crate::logic::extract;
+use crate::logic::manager::ManagerMessage;
 use headless_chrome::Browser;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use reqwest::Client;
@@ -7,11 +11,6 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tracing::{error, info};
 use url::Url;
-
-use crate::communication::publisher::{DocumentMessage, DocumentPublisher};
-use crate::data::blob_storage::BlobStorage;
-use crate::logic::extract;
-use crate::logic::manager::ManagerMessage;
 
 pub enum WorkerMessage {
     Fetch(String),
@@ -259,11 +258,22 @@ impl Actor for WorkerActor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::communication::publisher::MockPublisher;
-    use crate::data::blob_storage::MockBlobStorage;
+    use crate::data::blob_storage::DbBlobStorage;
     use axum::{Router, routing::get};
     use reqwest::StatusCode;
+    use std::pin::Pin;
     use tokio::net::TcpListener;
+
+    struct MockPublisher;
+
+    impl DocumentPublisher for MockPublisher {
+        fn publish(
+            &self,
+            _message: DocumentMessage,
+        ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+            Box::pin(async move { Ok(()) })
+        }
+    }
 
     async fn spawn_test_server() -> String {
         let app = Router::new()
@@ -291,7 +301,7 @@ mod tests {
     fn create_test_worker_state() -> WorkerState {
         WorkerState {
             http_client: Client::new(),
-            blob_storage: Arc::new(MockBlobStorage),
+            blob_storage: Arc::new(DbBlobStorage::new(":memory:").unwrap()),
             publisher: Arc::new(MockPublisher),
             worker_type: WorkerType::Static,
             shard_idx: 0,

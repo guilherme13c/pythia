@@ -1,3 +1,6 @@
+use lapin::{
+    BasicProperties, Channel, Connection, ConnectionProperties, options::*, types::FieldTable,
+};
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -18,19 +21,55 @@ pub trait VectorPublisher: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
 }
 
-pub struct MockVectorPublisher;
+pub struct RabbitMqVectorPublisher {
+    channel: Channel,
+}
 
-impl VectorPublisher for MockVectorPublisher {
+impl RabbitMqVectorPublisher {
+    pub async fn new(amqp_addr: &str) -> Result<Self, String> {
+        let conn = Connection::connect(amqp_addr, ConnectionProperties::default())
+            .await
+            .map_err(|e| format!("Failed to connect to RabbitMQ: {}", e))?;
+
+        let channel = conn.create_channel().await.map_err(|e| e.to_string())?;
+
+        channel
+            .queue_declare(
+                "vector_queue".into(),
+                QueueDeclareOptions {
+                    durable: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .map_err(|e| format!("Failed to declare queue: {}", e))?;
+
+        Ok(Self { channel })
+    }
+}
+
+impl VectorPublisher for RabbitMqVectorPublisher {
     fn publish(
         &self,
         message: VectorMessage,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        let channel = self.channel.clone();
+
         Box::pin(async move {
-            println!(
-                "📈 [Comm Layer] Published {} vectors to queue for URL: {}",
-                message.embeddings.len(),
-                message.url
-            );
+            let payload = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
+
+            channel
+                .basic_publish(
+                    "".into(),
+                    "vector_queue".into(),
+                    BasicPublishOptions::default(),
+                    &payload,
+                    BasicProperties::default().with_delivery_mode(2),
+                )
+                .await
+                .map_err(|e| format!("Failed to publish vectors to RabbitMQ: {}", e))?;
+
             Ok(())
         })
     }

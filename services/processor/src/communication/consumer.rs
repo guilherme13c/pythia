@@ -1,23 +1,21 @@
-use crate::logic::worker::IndexerMessage;
+use crate::logic::worker::ProcessorMessage;
 use futures::StreamExt;
 use lapin::{Connection, ConnectionProperties, options::*, types::FieldTable};
 use ractor::ActorRef;
 use serde::Deserialize;
 use tracing::{error, info};
 
-#[derive(Deserialize, Clone, Debug)]
-pub struct VectorPayload {
+#[derive(Deserialize, Debug)]
+pub struct DocumentPayload {
     pub url: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub chunks: Vec<String>,
-    pub embeddings: Vec<Vec<f32>>,
+    pub blob_id: String,
+    pub mime_type: String,
 }
 
-pub async fn start_vector_consumer(amqp_addr: &str, indexer_ref: ActorRef<IndexerMessage>) {
+pub async fn start_document_consumer(amqp_addr: &str, processor_ref: ActorRef<ProcessorMessage>) {
     let conn = Connection::connect(amqp_addr, ConnectionProperties::default())
         .await
-        .expect("Indexer Consumer failed to connect to RabbitMQ");
+        .expect("Processor Consumer failed to connect to RabbitMQ");
 
     let channel = conn
         .create_channel()
@@ -26,37 +24,35 @@ pub async fn start_vector_consumer(amqp_addr: &str, indexer_ref: ActorRef<Indexe
 
     let mut consumer = channel
         .basic_consume(
-            "vector_queue".into(),
-            "indexer_consumer".into(),
+            "document_queue".into(),
+            "processor_consumer".into(),
             BasicConsumeOptions::default(),
             FieldTable::default(),
         )
         .await
         .expect("Failed to start RabbitMQ consumer");
 
-    info!("🎧 Indexer started consuming from 'vector_queue'");
+    info!("🎧 Processor started consuming from 'document_queue'");
 
     tokio::spawn(async move {
         while let Some(delivery) = consumer.next().await {
             match delivery {
                 Ok(delivery) => {
-                    if let Ok(payload) = serde_json::from_slice::<VectorPayload>(&delivery.data) {
-                        let msg = IndexerMessage::Store {
+                    if let Ok(payload) = serde_json::from_slice::<DocumentPayload>(&delivery.data) {
+                        let msg = ProcessorMessage::ProcessDocument {
                             url: payload.url,
-                            title: payload.title,
-                            description: payload.description,
-                            chunks: payload.chunks,
-                            embeddings: payload.embeddings,
+                            blob_id: payload.blob_id,
+                            mime_type: payload.mime_type,
                         };
 
-                        if let Err(e) = indexer_ref.cast(msg) {
-                            error!("Failed to route message to Indexer Actor: {}", e);
+                        if let Err(e) = processor_ref.cast(msg) {
+                            error!("Failed to route message to Processor Actor: {}", e);
                             let _ = delivery.nack(BasicNackOptions::default()).await;
                         } else {
                             let _ = delivery.ack(BasicAckOptions::default()).await;
                         }
                     } else {
-                        error!("Failed to deserialize VectorPayload");
+                        error!("Failed to deserialize DocumentPayload");
                         let _ = delivery.nack(BasicNackOptions::default()).await;
                     }
                 }

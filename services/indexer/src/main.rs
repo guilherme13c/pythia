@@ -1,17 +1,11 @@
-use ractor::Actor;
-use std::sync::Arc;
-use tracing::info;
-
-pub mod api;
-pub mod communication;
-pub mod config;
-pub mod data;
-pub mod logic;
-
 use indexer::api::server::start_api_server;
+use indexer::communication::consumer::start_vector_consumer;
 use indexer::config::IndexerConfig;
 use indexer::data::lancedb_store::LanceDbStore;
 use indexer::logic::worker::{IndexerActor, IndexerState};
+use ractor::Actor;
+use std::sync::Arc;
+use tracing::info;
 
 #[tokio::main]
 async fn main() {
@@ -32,6 +26,8 @@ async fn main() {
     let (actor_ref, _handle) = Actor::spawn(Some("indexer-actor".to_string()), IndexerActor, state)
         .await
         .expect("Failed to spawn IndexerActor");
+
+    start_vector_consumer(&config.amqp_addr, actor_ref.clone()).await;
 
     start_api_server(config.port, actor_ref).await;
 }

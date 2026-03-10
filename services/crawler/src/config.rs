@@ -6,11 +6,12 @@ pub struct CrawlerConfig {
     pub num_workers: usize,
     pub db_path: String,
     pub seed_urls: Vec<String>,
+    pub blob_db_path: String,
+    pub amqp_addr: String,
 }
 
 impl CrawlerConfig {
     pub fn load() -> Self {
-        // Loads the nearest .env file (service level), then falls back up to the root .env
         let _ = dotenvy::dotenv();
 
         Self {
@@ -29,6 +30,10 @@ impl CrawlerConfig {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect(),
+            blob_db_path: std::env::var("BLOB_DB_PATH")
+                .unwrap_or_else(|_| "data/blobs.db".to_string()),
+            amqp_addr: std::env::var("AMQP_ADDR")
+                .unwrap_or_else(|_| "amqp://127.0.0.1:5672/%2f".to_string()),
         }
     }
 }

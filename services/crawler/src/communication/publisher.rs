@@ -1,3 +1,6 @@
+use lapin::{
+    BasicProperties, Channel, Connection, ConnectionProperties, options::*, types::FieldTable,
+};
 use serde::Serialize;
 use std::future::Future;
 use std::pin::Pin;
@@ -16,18 +19,55 @@ pub trait DocumentPublisher: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>>;
 }
 
-pub struct MockPublisher;
+pub struct RabbitMqPublisher {
+    channel: Channel,
+}
 
-impl DocumentPublisher for MockPublisher {
+impl RabbitMqPublisher {
+    pub async fn new(amqp_addr: &str) -> Result<Self, String> {
+        let conn = Connection::connect(amqp_addr, ConnectionProperties::default())
+            .await
+            .map_err(|e| format!("Failed to connect to RabbitMQ: {}", e))?;
+
+        let channel = conn.create_channel().await.map_err(|e| e.to_string())?;
+
+        channel
+            .queue_declare(
+                "document_queue".into(),
+                QueueDeclareOptions {
+                    durable: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await
+            .map_err(|e| format!("Failed to declare queue: {}", e))?;
+
+        Ok(Self { channel })
+    }
+}
+
+impl DocumentPublisher for RabbitMqPublisher {
     fn publish(
         &self,
         message: DocumentMessage,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + '_>> {
+        let channel = self.channel.clone();
+
         Box::pin(async move {
-            println!(
-                "📫 [Comm Layer] Published message to queue: URL: {} -> BLOB_ID: {}",
-                message.url, message.blob_id
-            );
+            let payload = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
+
+            channel
+                .basic_publish(
+                    "".into(),
+                    "document_queue".into(),
+                    BasicPublishOptions::default(),
+                    &payload,
+                    BasicProperties::default().with_delivery_mode(2),
+                )
+                .await
+                .map_err(|e| format!("Failed to publish to RabbitMQ: {}", e))?;
+
             Ok(())
         })
     }

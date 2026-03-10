@@ -7,3 +7,8 @@ edition = "2024"
 serde = { workspace = true }
 stop-words = "0.10.0"
 rust-stemmers = "1.2.0"
+
+[dev-dependencies]
+mockito = "1.7.2"
+reqwest = { workspace = true }
+tokio = { workspace = true }

@@ -3,11 +3,15 @@ use axum::{
     extract::{Json, State},
     routing::post,
 };
-use processor::communication::publisher::MockVectorPublisher;
+use processor::communication::{
+    consumer::start_document_consumer, publisher::RabbitMqVectorPublisher,
+};
 use processor::config::ProcessorConfig;
-use processor::data::blob_storage::MockBlobStorageReader;
-use processor::logic::embedder::Embedder;
-use processor::logic::worker::{ProcessorActor, ProcessorState};
+use processor::data::blob_storage::DbBlobStorageReader;
+use processor::logic::{
+    embedder::Embedder,
+    worker::{ProcessorActor, ProcessorState},
+};
 use ractor::Actor;
 use std::sync::Arc;
 use tracing::info;
@@ -64,8 +68,13 @@ async fn main() {
     let embedder = Embedder::new(config.cache_path).expect("Failed to initialize FastEmbed");
     info!("FastEmbed model loaded!");
 
-    let blob_reader = Arc::new(MockBlobStorageReader);
-    let publisher = Arc::new(MockVectorPublisher);
+    let blob_reader =
+        Arc::new(DbBlobStorageReader::new(&config.blob_db_path).expect("Failed to init blob DB"));
+    let publisher = Arc::new(
+        RabbitMqVectorPublisher::new(&config.amqp_addr)
+            .await
+            .expect("Failed to connect to RabbitMQ"),
+    );
 
     let state = ProcessorState {
         blob_reader,
@@ -73,13 +82,15 @@ async fn main() {
         embedder: embedder.clone(),
     };
 
-    let (_processor_ref, _processor_handle) = Actor::spawn(
+    let (processor_ref, _processor_handle) = Actor::spawn(
         Some("processor-worker-1".to_string()),
         ProcessorActor,
         state,
     )
     .await
     .unwrap();
+
+    start_document_consumer(&config.amqp_addr, processor_ref).await;
 
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
