@@ -1,21 +1,15 @@
-use ractor::Actor;
-use std::sync::Arc;
-
-pub mod communication;
-pub mod config;
-pub mod data;
-pub mod logic;
-
 use axum::{
     Router,
     extract::{Json, State},
     routing::post,
 };
-use communication::publisher::MockVectorPublisher;
-use config::ProcessorConfig;
-use data::blob_storage::MockBlobStorageReader;
-use logic::embedder::Embedder;
-use logic::worker::{ProcessorActor, ProcessorState};
+use processor::communication::publisher::MockVectorPublisher;
+use processor::config::ProcessorConfig;
+use processor::data::blob_storage::MockBlobStorageReader;
+use processor::logic::embedder::Embedder;
+use processor::logic::worker::{ProcessorActor, ProcessorState};
+use ractor::Actor;
+use std::sync::Arc;
 use tracing::info;
 
 #[derive(serde::Deserialize)]

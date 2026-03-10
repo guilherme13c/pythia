@@ -23,3 +23,8 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "extract_bench"
+harness = false

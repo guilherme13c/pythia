@@ -31,6 +31,7 @@ arrow-cast = "57.3.0"
 dotenvy = "0.15.7"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+criterion = "0.8.2"
 
 # Shared Internal Lib
 shared = { path = "libs/shared" }

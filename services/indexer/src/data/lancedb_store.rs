@@ -85,7 +85,7 @@ impl LanceDbStore {
         Ok(())
     }
 
-    fn build_record_batch(
+    pub fn build_record_batch(
         schema: Arc<Schema>,
         url: &str,
         title: Option<&str>,

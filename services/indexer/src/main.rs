@@ -8,10 +8,10 @@ pub mod config;
 pub mod data;
 pub mod logic;
 
-use api::server::start_api_server;
-use config::IndexerConfig;
-use data::lancedb_store::LanceDbStore;
-use logic::worker::{IndexerActor, IndexerState};
+use indexer::api::server::start_api_server;
+use indexer::config::IndexerConfig;
+use indexer::data::lancedb_store::LanceDbStore;
+use indexer::logic::worker::{IndexerActor, IndexerState};
 
 #[tokio::main]
 async fn main() {

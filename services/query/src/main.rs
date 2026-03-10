@@ -1,17 +1,13 @@
-pub mod config;
-pub mod logic;
-
 use axum::{
     Json, Router,
     extract::{Query, State},
     http::StatusCode,
     routing::get,
 };
-use config::QueryConfig;
-use logic::client::SearchClient;
+use query::config::QueryConfig;
+use query::logic::client::SearchClient;
 use serde::Deserialize;
 use shared::models::SearchResult;
-use std::env;
 use std::sync::Arc;
 use tracing::{error, info};
 
@@ -36,7 +32,6 @@ async fn main() {
         .route("/search", get(search_handler))
         .with_state(state);
 
-    let port = env::var("PORT").unwrap_or_else(|_| "4000".to_string());
     let bind_addr = format!("0.0.0.0:{}", config.port);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();

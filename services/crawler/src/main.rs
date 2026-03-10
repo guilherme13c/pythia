@@ -1,21 +1,15 @@
+use crawler::communication::publisher::MockPublisher;
+use crawler::config::CrawlerConfig;
+use crawler::data::blob_storage::MockBlobStorage;
+use crawler::data::frontier::ManagerState;
+use crawler::logic::manager::{ManagerActor, ManagerMessage};
+use crawler::logic::worker::{WorkerActor, WorkerState, WorkerType, get_shard_index};
+use headless_chrome::{Browser, LaunchOptions};
 use ractor::Actor;
 use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::info;
 use url::Url;
-
-pub mod communication;
-pub mod config;
-pub mod data;
-pub mod logic;
-
-use communication::publisher::MockPublisher;
-use config::CrawlerConfig;
-use data::blob_storage::MockBlobStorage;
-use data::frontier::ManagerState;
-use headless_chrome::{Browser, LaunchOptions};
-use logic::manager::{ManagerActor, ManagerMessage};
-use logic::worker::{WorkerActor, WorkerState, WorkerType, get_shard_index};
 
 #[tokio::main]
 async fn main() {
