@@ -55,54 +55,64 @@ impl WorkerActor {
 
     async fn execute_fetch(&self, state: &WorkerState, url: &str) -> FetchResult {
         match &state.worker_type {
-            WorkerType::Static => match state.http_client.get(url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let content_type = resp
-                        .headers()
-                        .get(reqwest::header::CONTENT_TYPE)
-                        .and_then(|val| val.to_str().ok())
-                        .unwrap_or("text/html")
-                        .to_lowercase();
+            WorkerType::Static => self.fetch_static(&state.http_client, url).await,
+            WorkerType::Dynamic(browser) => self.fetch_dynamic(browser, url).await,
+        }
+    }
 
-                    match resp.bytes().await {
-                        Ok(bytes) => FetchResult::Success {
-                            content: bytes.to_vec(),
-                            mime_type: content_type,
-                        },
-                        Err(e) => FetchResult::Error(format!("Failed to read bytes: {}", e)),
-                    }
-                }
-                Ok(resp) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                    FetchResult::RateLimited
-                }
-                Ok(resp) => FetchResult::Error(format!("HTTP Status: {}", resp.status())),
-                Err(e) => FetchResult::Error(e.to_string()),
+    async fn fetch_static(&self, client: &Client, url: &str) -> FetchResult {
+        let resp = match client.get(url).send().await {
+            Ok(r) => r,
+            Err(e) => return FetchResult::Error(e.to_string()),
+        };
+
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return FetchResult::RateLimited;
+        }
+
+        if !resp.status().is_success() {
+            return FetchResult::Error(format!("HTTP Status: {}", resp.status()));
+        }
+
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|val| val.to_str().ok())
+            .unwrap_or("text/html")
+            .to_lowercase();
+
+        match resp.bytes().await {
+            Ok(bytes) => FetchResult::Success {
+                content: bytes.to_vec(),
+                mime_type: content_type,
             },
-            WorkerType::Dynamic(browser) => {
-                let b = browser.clone();
-                let u = url.to_string();
+            Err(e) => FetchResult::Error(format!("Failed to read bytes: {}", e)),
+        }
+    }
 
-                let res = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-                    let tab = b.new_tab().map_err(|e| e.to_string())?;
-                    tab.navigate_to(&u).map_err(|e| e.to_string())?;
-                    tab.wait_until_navigated().map_err(|e| e.to_string())?;
-                    std::thread::sleep(std::time::Duration::from_secs(2));
+    async fn fetch_dynamic(&self, browser: &Arc<Browser>, url: &str) -> FetchResult {
+        let b = browser.clone();
+        let u = url.to_string();
 
-                    tab.get_content()
-                        .map(|html| html.into_bytes())
-                        .map_err(|e| e.to_string())
-                })
-                .await;
+        let res = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+            let tab = b.new_tab().map_err(|e| e.to_string())?;
+            tab.navigate_to(&u).map_err(|e| e.to_string())?;
+            tab.wait_until_navigated().map_err(|e| e.to_string())?;
+            std::thread::sleep(std::time::Duration::from_secs(2));
 
-                match res {
-                    Ok(Ok(bytes)) => FetchResult::Success {
-                        content: bytes,
-                        mime_type: "text/html".to_string(),
-                    },
-                    Ok(Err(e)) => FetchResult::Error(e),
-                    Err(e) => FetchResult::Error(format!("Tokio spawn_blocking error: {}", e)),
-                }
-            }
+            tab.get_content()
+                .map(|html| html.into_bytes())
+                .map_err(|e| e.to_string())
+        })
+        .await;
+
+        match res {
+            Ok(Ok(bytes)) => FetchResult::Success {
+                content: bytes,
+                mime_type: "text/html".to_string(),
+            },
+            Ok(Err(e)) => FetchResult::Error(e),
+            Err(e) => FetchResult::Error(format!("Tokio spawn_blocking error: {}", e)),
         }
     }
 
@@ -124,40 +134,8 @@ impl WorkerActor {
 
         match self.execute_fetch(state, &url).await {
             FetchResult::Success { content, mime_type } => {
-                let links = extract::extract_links(&content, &mime_type, &url);
-                if !links.is_empty() {
-                    let mut routed_batches: HashMap<usize, Vec<String>> = HashMap::new();
-                    for link in links {
-                        if let Ok(parsed) = Url::parse(&link) {
-                            let link_domain = parsed.host_str().unwrap_or("").to_string();
-                            if !link_domain.is_empty() {
-                                let shard = get_shard_index(&link_domain, state.total_shards);
-                                routed_batches.entry(shard).or_default().push(link);
-                            }
-                        }
-                    }
-
-                    for (shard, urls) in routed_batches {
-                        self.send_to_manager_shard(shard, ManagerMessage::AddUrls(urls));
-                    }
-                }
-
-                match state.blob_storage.save_blob(content).await {
-                    Ok(blob_id) => {
-                        let msg = DocumentMessage {
-                            url: url.clone(),
-                            blob_id,
-                            mime_type,
-                        };
-                        let _ = state.publisher.publish(msg).await;
-                        let shard = get_shard_index(&domain, state.total_shards);
-                        self.send_to_manager_shard(
-                            shard,
-                            ManagerMessage::CrawlSuccess(domain.clone(), url),
-                        );
-                    }
-                    Err(e) => eprintln!("Failed to save blob: {}", e),
-                }
+                self.process_successful_fetch(state, &url, &domain, content, mime_type)
+                    .await;
             }
             FetchResult::RateLimited => {
                 let shard = get_shard_index(&domain, state.total_shards);
@@ -173,6 +151,54 @@ impl WorkerActor {
             state.shard_idx,
             ManagerMessage::RequestWork(myself.get_name().unwrap()),
         );
+    }
+
+    async fn process_successful_fetch(
+        &self,
+        state: &WorkerState,
+        url: &str,
+        domain: &str,
+        content: Vec<u8>,
+        mime_type: String,
+    ) {
+        let links = extract::extract_links(&content, &mime_type, url);
+        if !links.is_empty() {
+            self.route_extracted_links(state, links);
+        }
+
+        match state.blob_storage.save_blob(content).await {
+            Ok(blob_id) => {
+                let msg = DocumentMessage {
+                    url: url.to_string(),
+                    blob_id,
+                    mime_type,
+                };
+                let _ = state.publisher.publish(msg).await;
+                let shard = get_shard_index(domain, state.total_shards);
+                self.send_to_manager_shard(
+                    shard,
+                    ManagerMessage::CrawlSuccess(domain.to_string(), url.to_string()),
+                );
+            }
+            Err(e) => eprintln!("Failed to save blob: {}", e),
+        }
+    }
+
+    fn route_extracted_links(&self, state: &WorkerState, links: Vec<String>) {
+        let mut routed_batches: HashMap<usize, Vec<String>> = HashMap::new();
+        for link in links {
+            if let Ok(parsed) = Url::parse(&link) {
+                let link_domain = parsed.host_str().unwrap_or("").to_string();
+                if !link_domain.is_empty() {
+                    let shard = get_shard_index(&link_domain, state.total_shards);
+                    routed_batches.entry(shard).or_default().push(link);
+                }
+            }
+        }
+
+        for (shard, urls) in routed_batches {
+            self.send_to_manager_shard(shard, ManagerMessage::AddUrls(urls));
+        }
     }
 
     async fn handle_fetch_robots(

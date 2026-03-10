@@ -19,6 +19,7 @@ pub struct ManagerActor;
 impl ManagerActor {
     fn handle_add_urls(&self, state: &mut ManagerState, urls: Vec<String>) {
         let mut new_urls = Vec::new();
+
         for url in urls {
             if !state.seen_urls.check(&url) {
                 state.seen_urls.set(&url);
@@ -28,57 +29,33 @@ impl ManagerActor {
         }
 
         if !new_urls.is_empty() {
-            let tx = state.db.transaction().unwrap();
-            {
-                let mut stmt = tx
-                    .prepare("INSERT INTO urls (url, status) VALUES (?1, 'pending') ON CONFLICT(url) DO NOTHING")
-                    .unwrap();
-                for url in new_urls {
-                    let _ = stmt.execute([&url]);
-                }
-            }
-            tx.commit().unwrap();
+            self.persist_new_urls(&mut state.db, new_urls);
         }
+    }
+
+    fn persist_new_urls(&self, db: &mut rusqlite::Connection, new_urls: Vec<String>) {
+        let Ok(tx) = db.transaction() else {
+            return;
+        };
+
+        {
+            let Ok(mut stmt) = tx.prepare(
+                "INSERT INTO urls (url, status) VALUES (?1, 'pending') ON CONFLICT(url) DO NOTHING",
+            ) else {
+                return;
+            };
+            for url in new_urls {
+                let _ = stmt.execute([&url]);
+            }
+        }
+        let _ = tx.commit();
     }
 
     fn handle_request_work(&self, state: &mut ManagerState, worker_name: String) {
         let mut next_job = None;
 
         if let Some(url_str) = state.static_frontier.pop_front() {
-            if let Ok(parsed_url) = Url::parse(&url_str) {
-                let domain = parsed_url.host_str().unwrap_or("unknown").to_string();
-                let metadata = state
-                    .domain_metadata
-                    .entry(domain.clone())
-                    .or_insert_with(DomainMetadata::default_unfetched);
-
-                if !metadata.rules_fetched {
-                    let robots_url = format!("{}://{}/robots.txt", parsed_url.scheme(), domain);
-                    next_job = Some(WorkerMessage::FetchRobotsTxt(domain, robots_url));
-                    state.static_frontier.push_front(url_str);
-                } else if let Some(backoff_time) = metadata.backoff_until {
-                    if Instant::now() < backoff_time {
-                        state.static_frontier.push_back(url_str);
-                    } else {
-                        metadata.backoff_until = None;
-                        next_job = self.check_politeness_and_assign(
-                            &mut state.static_frontier,
-                            url_str,
-                            metadata,
-                        );
-                    }
-                } else if !metadata.can_crawl(parsed_url.path()) {
-                    let _ = state
-                        .db
-                        .execute("UPDATE urls SET status = 'done' WHERE url = ?1", [&url_str]);
-                } else {
-                    next_job = self.check_politeness_and_assign(
-                        &mut state.static_frontier,
-                        url_str,
-                        metadata,
-                    );
-                }
-            }
+            next_job = self.evaluate_url_for_work(state, url_str);
         }
 
         if let Some(worker_cell) = ractor::registry::where_is(worker_name) {
@@ -87,6 +64,43 @@ impl ManagerActor {
                 let _ = worker_ref.cast(job);
             }
         }
+    }
+
+    fn evaluate_url_for_work(
+        &self,
+        state: &mut ManagerState,
+        url_str: String,
+    ) -> Option<WorkerMessage> {
+        let parsed_url = Url::parse(&url_str).ok()?;
+        let domain = parsed_url.host_str().unwrap_or("unknown").to_string();
+
+        let metadata = state
+            .domain_metadata
+            .entry(domain.clone())
+            .or_insert_with(DomainMetadata::default_unfetched);
+
+        if !metadata.rules_fetched {
+            let robots_url = format!("{}://{}/robots.txt", parsed_url.scheme(), domain);
+            state.static_frontier.push_front(url_str);
+            return Some(WorkerMessage::FetchRobotsTxt(domain, robots_url));
+        }
+
+        if let Some(backoff_time) = metadata.backoff_until {
+            if Instant::now() < backoff_time {
+                state.static_frontier.push_back(url_str);
+                return None;
+            }
+            metadata.backoff_until = None;
+        }
+
+        if !metadata.can_crawl(parsed_url.path()) {
+            let _ = state
+                .db
+                .execute("UPDATE urls SET status = 'done' WHERE url = ?1", [&url_str]);
+            return None;
+        }
+
+        self.check_politeness_and_assign(&mut state.static_frontier, url_str, metadata)
     }
 
     fn check_politeness_and_assign(
