@@ -22,6 +22,17 @@ struct EmbedResponse {
     vector: Vec<f32>,
 }
 
+#[derive(serde::Deserialize)]
+struct RerankRequest {
+    query: String,
+    documents: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RerankResponse {
+    scores: Vec<f32>,
+}
+
 async fn handle_embed(
     State(embedder): State<Embedder>,
     Json(req): Json<EmbedRequest>,
@@ -31,6 +42,16 @@ async fn handle_embed(
     Json(EmbedResponse {
         vector: vectors.get(0).cloned().unwrap_or_else(|| vec![0.0; 384]),
     })
+}
+
+async fn handle_rerank(
+    State(embedder): State<Embedder>,
+    Json(req): Json<RerankRequest>,
+) -> Json<RerankResponse> {
+    let scores = embedder
+        .rerank_documents(&req.query, req.documents)
+        .unwrap_or_default();
+    Json(RerankResponse { scores })
 }
 
 #[tokio::main]
@@ -64,6 +85,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/embed", post(handle_embed))
+        .route("/rerank", post(handle_rerank))
         .with_state(embedder.clone());
 
     let bind_addr = format!("0.0.0.0:{}", config.port);

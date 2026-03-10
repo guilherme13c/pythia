@@ -1,4 +1,4 @@
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, InitOptions, RerankInitOptions, TextEmbedding, TextRerank};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -88,19 +88,25 @@ impl TextChunker {
 
 #[derive(Clone)]
 pub struct Embedder {
-    model: Arc<Mutex<TextEmbedding>>,
+    embedding_model: Arc<Mutex<TextEmbedding>>,
+    rerank_model: Arc<Mutex<TextRerank>>,
 }
 
 impl Embedder {
     pub fn new(cache_dir: String) -> Result<Self, String> {
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_cache_dir(PathBuf::from(cache_dir)),
+        let cache_path = PathBuf::from(cache_dir);
+
+        let embedding = TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_path.clone()),
         )
         .map_err(|e| format!("Failed to load fastembed model: {:?}", e))?;
 
+        let reranker = TextRerank::try_new(RerankInitOptions::default().with_cache_dir(cache_path))
+            .map_err(|e| format!("Failed to load rerank model: {:?}", e))?;
+
         Ok(Self {
-            model: Arc::new(Mutex::new(model)),
+            embedding_model: Arc::new(Mutex::new(embedding)),
+            rerank_model: Arc::new(Mutex::new(reranker)),
         })
     }
 
@@ -109,10 +115,35 @@ impl Embedder {
             return Ok(Vec::new());
         }
 
-        let mut model_guard = self.model.lock().unwrap();
+        let mut model_guard = self.embedding_model.lock().unwrap();
+
         model_guard
             .embed(chunks, None)
             .map_err(|e| format!("Embedding failed: {:?}", e))
+    }
+
+    pub fn rerank_documents(
+        &self,
+        query: &str,
+        documents: Vec<String>,
+    ) -> Result<Vec<f32>, String> {
+        if documents.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let doc_refs: Vec<&str> = documents.iter().map(|s| s.as_str()).collect();
+
+        let mut model_guard = self.rerank_model.lock().unwrap();
+        let results = model_guard
+            .rerank(query, doc_refs, true, None)
+            .map_err(|e| format!("Reranking failed: {:?}", e))?;
+
+        let mut scores = vec![0.0; documents.len()];
+        for res in results {
+            scores[res.index] = res.score;
+        }
+
+        Ok(scores)
     }
 }
 
