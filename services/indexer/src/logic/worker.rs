@@ -24,6 +24,51 @@ pub struct IndexerState {
 
 pub struct IndexerActor;
 
+impl IndexerActor {
+    async fn handle_store(
+        &self,
+        state: &IndexerState,
+        url: String,
+        title: Option<String>,
+        description: Option<String>,
+        chunks: Vec<String>,
+        embeddings: Vec<Vec<f32>>,
+    ) {
+        let chunk_count = chunks.len();
+        let result = state
+            .store
+            .insert_chunks(
+                &url,
+                title.as_deref(),
+                description.as_deref(),
+                chunks,
+                embeddings,
+            )
+            .await;
+
+        match result {
+            Ok(_) => println!("✅ Indexed {} chunks for {}", chunk_count, url),
+            Err(e) => eprintln!("❌ Database insertion error for {}: {}", url, e),
+        }
+    }
+
+    async fn handle_search(
+        &self,
+        state: &IndexerState,
+        query_vector: Vec<f32>,
+        limit: usize,
+        reply_to: tokio::sync::oneshot::Sender<Vec<SearchResult>>,
+    ) {
+        let results = state
+            .store
+            .search_vector(query_vector, limit)
+            .await
+            .unwrap_or_default();
+
+        let _ = reply_to.send(results);
+    }
+}
+
 impl Actor for IndexerActor {
     type Msg = IndexerMessage;
     type State = IndexerState;
@@ -51,39 +96,23 @@ impl Actor for IndexerActor {
                 chunks,
                 embeddings,
             } => {
-                let chunk_count = chunks.len();
-                if let Err(e) = state
-                    .store
-                    .insert_chunks(
-                        &url,
-                        title.as_deref(),
-                        description.as_deref(),
-                        chunks,
-                        embeddings,
-                    )
-                    .await
-                {
-                    eprintln!("❌ Database insertion error for {}: {}", url, e);
-                } else {
-                    println!("✅ Indexed {} chunks for {}", chunk_count, url);
-                }
+                self.handle_store(state, url, title, description, chunks, embeddings)
+                    .await;
             }
             IndexerMessage::Search {
                 query_vector,
                 limit,
                 reply_to,
             } => {
-                let results = state
-                    .store
-                    .search_vector(query_vector, limit)
-                    .await
-                    .unwrap_or_default();
-                let _ = reply_to.send(results);
+                self.handle_search(state, query_vector, limit, reply_to)
+                    .await;
             }
         }
         Ok(())
     }
 }
+
+// ... (Leave the existing `mod tests` block unchanged here) ...
 
 #[cfg(test)]
 mod tests {

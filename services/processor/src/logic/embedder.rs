@@ -41,31 +41,49 @@ impl TextChunker {
         let mut i = 0;
 
         while i < sentences.len() {
-            let mut chunk_words = 0;
-            let mut chunk_sentences = Vec::new();
-            let mut j = i;
+            let (chunk_text, next_i) =
+                Self::build_chunk(&sentences, i, max_words, overlap_sentences);
+            chunks.push(chunk_text);
 
-            while j < sentences.len() {
-                let sentence = &sentences[j];
-                let sentence_words = sentence.split_whitespace().count();
-
-                if chunk_words + sentence_words > max_words && !chunk_sentences.is_empty() {
-                    break;
-                }
-
-                chunk_sentences.push(sentence.as_str());
-                chunk_words += sentence_words;
-                j += 1;
-            }
-
-            chunks.push(chunk_sentences.join(" "));
-            if j == sentences.len() {
+            if next_i >= sentences.len() || next_i <= i {
                 break;
             }
-            i = std::cmp::max(i + 1, j.saturating_sub(overlap_sentences));
+            i = next_i;
         }
 
         chunks
+    }
+
+    fn build_chunk(
+        sentences: &[String],
+        start_idx: usize,
+        max_words: usize,
+        overlap_sentences: usize,
+    ) -> (String, usize) {
+        let mut chunk_words = 0;
+        let mut chunk_sentences = Vec::new();
+        let mut j = start_idx;
+
+        while j < sentences.len() {
+            let sentence = &sentences[j];
+            let sentence_words = sentence.split_whitespace().count();
+
+            if chunk_words + sentence_words > max_words && !chunk_sentences.is_empty() {
+                break;
+            }
+
+            chunk_sentences.push(sentence.as_str());
+            chunk_words += sentence_words;
+            j += 1;
+        }
+
+        let next_i = if j == sentences.len() {
+            j
+        } else {
+            std::cmp::max(start_idx + 1, j.saturating_sub(overlap_sentences))
+        };
+
+        (chunk_sentences.join(" "), next_i)
     }
 }
 

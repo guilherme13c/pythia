@@ -56,38 +56,11 @@ fn parse_pdf(bytes: &[u8], url_str: &str) -> Result<ExtractedDocument, String> {
     let mut description = None;
 
     if let Ok(doc) = lopdf::Document::load_mem(bytes) {
-        if let Ok(info_ref) = doc.trailer.get(b"Info") {
-            if let Ok(info_dict) = doc
-                .get_object(info_ref.as_reference().unwrap_or((0, 0)))
-                .and_then(|obj| obj.as_dict())
-            {
-                if let Ok(t_bytes) = info_dict.get(b"Title").and_then(|obj| obj.as_str()) {
-                    let trimmed = String::from_utf8_lossy(t_bytes).trim().to_string();
-                    if !trimmed.is_empty() {
-                        title = Some(trimmed);
-                    }
-                }
-                if let Ok(s_bytes) = info_dict.get(b"Subject").and_then(|obj| obj.as_str()) {
-                    let trimmed = String::from_utf8_lossy(s_bytes).trim().to_string();
-                    if !trimmed.is_empty() {
-                        description = Some(trimmed);
-                    }
-                }
-            }
-        }
+        extract_pdf_metadata(&doc, &mut title, &mut description);
     }
 
     if title.is_none() {
-        if let Ok(parsed_url) = Url::parse(url_str) {
-            if let Some(segments) = parsed_url.path_segments() {
-                if let Some(last) = segments.last() {
-                    let fallback = last.replace(".pdf", "").replace(['-', '_'], " ");
-                    if !fallback.trim().is_empty() {
-                        title = Some(fallback);
-                    }
-                }
-            }
-        }
+        title = extract_fallback_title_from_url(url_str);
     }
 
     Ok(ExtractedDocument {
@@ -95,6 +68,48 @@ fn parse_pdf(bytes: &[u8], url_str: &str) -> Result<ExtractedDocument, String> {
         title,
         description,
     })
+}
+
+fn extract_pdf_metadata(
+    doc: &lopdf::Document,
+    title: &mut Option<String>,
+    description: &mut Option<String>,
+) {
+    let Ok(info_ref) = doc.trailer.get(b"Info") else {
+        return;
+    };
+    let Ok(info_dict) = doc
+        .get_object(info_ref.as_reference().unwrap_or((0, 0)))
+        .and_then(|obj| obj.as_dict())
+    else {
+        return;
+    };
+
+    if let Ok(t_bytes) = info_dict.get(b"Title").and_then(|obj| obj.as_str()) {
+        let trimmed = String::from_utf8_lossy(t_bytes).trim().to_string();
+        if !trimmed.is_empty() {
+            *title = Some(trimmed);
+        }
+    }
+    if let Ok(s_bytes) = info_dict.get(b"Subject").and_then(|obj| obj.as_str()) {
+        let trimmed = String::from_utf8_lossy(s_bytes).trim().to_string();
+        if !trimmed.is_empty() {
+            *description = Some(trimmed);
+        }
+    }
+}
+
+fn extract_fallback_title_from_url(url_str: &str) -> Option<String> {
+    let parsed_url = Url::parse(url_str).ok()?;
+    let segments = parsed_url.path_segments()?;
+    let last = segments.last()?;
+    let fallback = last.replace(".pdf", "").replace(['-', '_'], " ");
+
+    if !fallback.trim().is_empty() {
+        Some(fallback)
+    } else {
+        None
+    }
 }
 
 fn parse_xml(xml: &str) -> ExtractedDocument {
@@ -115,36 +130,26 @@ fn parse_xml(xml: &str) -> ExtractedDocument {
             Ok(Event::Start(ref e)) => {
                 current_tag = String::from_utf8_lossy(e.name().as_ref()).to_lowercase()
             }
-
             Ok(Event::Text(e)) => {
                 let text = String::from_utf8_lossy(e.as_ref());
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    text_content.push(trimmed.to_string());
-                    if current_tag == "title" && title.is_none() {
-                        title = Some(trimmed.to_string());
-                    } else if (current_tag == "description" || current_tag == "summary")
-                        && description.is_none()
-                    {
-                        description = Some(trimmed.to_string());
-                    }
-                }
+                process_xml_text(
+                    &text,
+                    &current_tag,
+                    &mut text_content,
+                    &mut title,
+                    &mut description,
+                );
             }
             Ok(Event::CData(e)) => {
                 let text = String::from_utf8_lossy(e.as_ref());
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    text_content.push(trimmed.to_string());
-                    if current_tag == "title" && title.is_none() {
-                        title = Some(trimmed.to_string());
-                    } else if (current_tag == "description" || current_tag == "summary")
-                        && description.is_none()
-                    {
-                        description = Some(trimmed.to_string());
-                    }
-                }
+                process_xml_text(
+                    &text,
+                    &current_tag,
+                    &mut text_content,
+                    &mut title,
+                    &mut description,
+                );
             }
-
             Ok(Event::End(_)) => current_tag.clear(),
             Ok(Event::Eof) | Err(_) => break,
             _ => (),
@@ -156,5 +161,26 @@ fn parse_xml(xml: &str) -> ExtractedDocument {
         text: text_content.join(" "),
         title,
         description,
+    }
+}
+
+fn process_xml_text(
+    text: &str,
+    current_tag: &str,
+    text_content: &mut Vec<String>,
+    title: &mut Option<String>,
+    description: &mut Option<String>,
+) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    text_content.push(trimmed.to_string());
+
+    if current_tag == "title" && title.is_none() {
+        *title = Some(trimmed.to_string());
+    } else if (current_tag == "description" || current_tag == "summary") && description.is_none() {
+        *description = Some(trimmed.to_string());
     }
 }

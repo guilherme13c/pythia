@@ -38,18 +38,24 @@ impl LanceDbStore {
 
         let table = match conn.open_table(table_name).execute().await {
             Ok(t) => t,
-            Err(_) => {
-                let empty_data: Vec<Result<RecordBatch, ArrowError>> = vec![];
-                let empty_batches = Box::new(RecordBatchIterator::new(empty_data, schema.clone()));
-
-                conn.create_table(table_name, empty_batches)
-                    .execute()
-                    .await
-                    .map_err(|e| format!("Failed to create table: {}", e))?
-            }
+            Err(_) => Self::create_empty_table(&conn, table_name, schema.clone()).await?,
         };
 
         Ok(Self { table })
+    }
+
+    async fn create_empty_table(
+        conn: &lancedb::Connection,
+        table_name: &str,
+        schema: Arc<Schema>,
+    ) -> Result<lancedb::Table, String> {
+        let empty_data: Vec<Result<RecordBatch, ArrowError>> = vec![];
+        let empty_batches = Box::new(RecordBatchIterator::new(empty_data, schema));
+
+        conn.create_table(table_name, empty_batches)
+            .execute()
+            .await
+            .map_err(|e| format!("Failed to create table: {}", e))
     }
 
     pub async fn insert_chunks(
@@ -64,8 +70,30 @@ impl LanceDbStore {
             return Err("Chunks and embeddings length mismatch".to_string());
         }
 
-        let num_rows = chunks.len();
         let schema = self.table.schema().await.map_err(|e| e.to_string())?;
+
+        let batch =
+            Self::build_record_batch(schema.clone(), url, title, description, chunks, embeddings)?;
+        let batches = Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
+
+        self.table
+            .add(batches)
+            .execute()
+            .await
+            .map_err(|e| format!("Failed to insert into LanceDB: {}", e))?;
+
+        Ok(())
+    }
+
+    fn build_record_batch(
+        schema: Arc<Schema>,
+        url: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        chunks: Vec<String>,
+        embeddings: Vec<Vec<f32>>,
+    ) -> Result<RecordBatch, String> {
+        let num_rows = chunks.len();
 
         let url_array = Arc::new(StringArray::from(vec![url; num_rows]));
         let title_array = Arc::new(StringArray::from(vec![title; num_rows]));
@@ -84,8 +112,8 @@ impl LanceDbStore {
             ),
         );
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
+        RecordBatch::try_new(
+            schema,
             vec![
                 url_array as _,
                 title_array as _,
@@ -94,17 +122,7 @@ impl LanceDbStore {
                 vector_array as _,
             ],
         )
-        .map_err(|e| format!("Failed to create record batch: {}", e))?;
-
-        let batches = Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-
-        self.table
-            .add(batches)
-            .execute()
-            .await
-            .map_err(|e| format!("Failed to insert into LanceDB: {}", e))?;
-
-        Ok(())
+        .map_err(|e| format!("Failed to create record batch: {}", e))
     }
 
     pub async fn search_vector(
@@ -123,35 +141,16 @@ impl LanceDbStore {
         let mut stream = query.execute().await.map_err(|e| e.to_string())?;
 
         while let Some(Ok(batch)) = stream.next().await {
-            results.extend(self.parse_record_batch(&batch, true));
+            results.extend(Self::parse_record_batch(&batch, true));
         }
 
         Ok(results)
     }
 
-    fn parse_record_batch(&self, batch: &RecordBatch, is_vector: bool) -> Vec<SearchResult> {
-        let mut results = Vec::with_capacity(batch.num_rows());
-
-        let url_array = batch
-            .column_by_name("url")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
-        let text_array = batch
-            .column_by_name("text")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
-        let title_array = batch
-            .column_by_name("title")
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+    fn parse_record_batch(batch: &RecordBatch, is_vector: bool) -> Vec<SearchResult> {
+        let url_array = Self::get_string_array(batch, "url");
+        let text_array = Self::get_string_array(batch, "text");
+        let title_array = Self::get_string_array(batch, "title");
 
         let score_col = if is_vector { "_distance" } else { "_score" };
         let score_array = batch
@@ -161,8 +160,8 @@ impl LanceDbStore {
             .downcast_ref::<Float32Array>()
             .unwrap();
 
-        for i in 0..batch.num_rows() {
-            results.push(SearchResult {
+        (0..batch.num_rows())
+            .map(|i| SearchResult {
                 url: url_array.value(i).to_string(),
                 text: text_array.value(i).to_string(),
                 title: if title_array.is_null(i) {
@@ -173,11 +172,21 @@ impl LanceDbStore {
                 description: Some("".to_string()),
                 score: score_array.value(i),
                 snippet: "".to_string(),
-            });
-        }
-        results
+            })
+            .collect()
+    }
+
+    fn get_string_array<'a>(batch: &'a RecordBatch, col_name: &str) -> &'a StringArray {
+        batch
+            .column_by_name(col_name)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
     }
 }
+
+// ... (Leave the existing `mod tests` block unchanged here) ...
 
 #[cfg(test)]
 mod tests {

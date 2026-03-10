@@ -35,20 +35,14 @@ impl ProcessorActor {
             url, blob_id
         );
 
-        let bytes = match state.blob_reader.read_blob(&blob_id).await {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("Failed to read blob {}: {}", blob_id, e);
-                return;
-            }
+        let Ok(bytes) = state.blob_reader.read_blob(&blob_id).await else {
+            eprintln!("Failed to read blob {}: {}", blob_id, url);
+            return;
         };
 
-        let document = match extract::parse_document(&bytes, &mime_type, &url) {
-            Ok(doc) => doc,
-            Err(e) => {
-                eprintln!("Failed to parse document {}: {}", url, e);
-                return;
-            }
+        let Ok(document) = extract::parse_document(&bytes, &mime_type, &url) else {
+            eprintln!("Failed to parse document {}", url);
+            return;
         };
 
         let clean_text = TextChunker::clean_text(&document.text);
@@ -60,12 +54,9 @@ impl ProcessorActor {
         }
 
         println!("🧠 Embedding {} chunks for {}...", chunks.len(), url);
-        let embeddings = match state.embedder.embed_chunks(chunks.clone()) {
-            Ok(emb) => emb,
-            Err(e) => {
-                eprintln!("Failed to generate embeddings for {}: {}", url, e);
-                return;
-            }
+        let Ok(embeddings) = state.embedder.embed_chunks(chunks.clone()) else {
+            eprintln!("Failed to generate embeddings for {}", url);
+            return;
         };
 
         let msg = VectorMessage {

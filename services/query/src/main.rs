@@ -1,11 +1,16 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
+    http::StatusCode,
     routing::get,
 };
 use serde::Deserialize;
 use shared::models::SearchResult;
+use std::env;
 use std::sync::Arc;
+
+pub mod logic;
+use logic::client::SearchClient;
 
 #[derive(Deserialize)]
 struct SearchParams {
@@ -14,52 +19,55 @@ struct SearchParams {
 }
 
 struct AppState {
-    http: reqwest::Client,
+    client: SearchClient,
 }
 
 #[tokio::main]
 async fn main() {
-    let state = Arc::new(AppState {
-        http: reqwest::Client::new(),
-    });
+    let processor_url =
+        env::var("PROCESSOR_URL").unwrap_or_else(|_| "http://localhost:3001".to_string());
+    let indexer_url =
+        env::var("INDEXER_URL").unwrap_or_else(|_| "http://localhost:3002".to_string());
+
+    let client = SearchClient::new(processor_url, indexer_url);
+    let state = Arc::new(AppState { client });
 
     let app = Router::new()
         .route("/search", get(search_handler))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:4000").await.unwrap();
-    println!("🔍 Query API ready on http://localhost:4000/search?q=your+query");
+    let port = env::var("PORT").unwrap_or_else(|_| "4000".to_string());
+    let bind_addr = format!("0.0.0.0:{}", port);
+
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
+    println!(
+        "🔍 Query API ready on http://localhost:{}/search?q=your+query",
+        port
+    );
     axum::serve(listener, app).await.unwrap();
 }
 
 async fn search_handler(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
-) -> Json<Vec<SearchResult>> {
+) -> Result<Json<Vec<SearchResult>>, (StatusCode, String)> {
     let limit = params.limit.unwrap_or(5);
 
-    let embed_resp = state
-        .http
-        .post("http://localhost:3001/embed")
-        .json(&serde_json::json!({ "text": params.q }))
-        .send()
-        .await
-        .unwrap();
-    let vector: Vec<f32> = embed_resp.json::<serde_json::Value>().await.unwrap()["vector"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_f64().unwrap() as f32)
-        .collect();
+    if params.q.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Query parameter 'q' cannot be empty".to_string(),
+        ));
+    }
 
-    let search_resp = state
-        .http
-        .post("http://localhost:3002/search")
-        .json(&serde_json::json!({ "vector": vector, "limit": limit }))
-        .send()
-        .await
-        .unwrap();
-
-    let results: Vec<SearchResult> = search_resp.json().await.unwrap();
-    Json(results)
+    match state.client.perform_search(&params.q, limit).await {
+        Ok(results) => Ok(Json(results)),
+        Err(e) => {
+            eprintln!("Search failed: {}", e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error during search execution".to_string(),
+            ))
+        }
+    }
 }
