@@ -187,7 +187,8 @@ impl LanceDbStore {
                     } else {
                         Some(desc_array.value(i).to_string())
                     },
-                    score: score_array.value(i),
+                    vector_distance: score_array.value(i),
+                    cross_encoder_score: 0.0,
                     snippet,
                 }
             })

@@ -10,7 +10,8 @@ pub struct SearchResult {
     pub title: Option<String>,
     pub description: Option<String>,
     pub text: String,
-    pub score: f32,
+    pub vector_distance: f32,
+    pub cross_encoder_score: f32,
     pub snippet: String,
 }
 

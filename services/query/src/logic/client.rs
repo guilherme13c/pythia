@@ -56,11 +56,17 @@ impl SearchClient {
         if let Ok(scores) = self.fetch_rerank(query_text, documents).await {
             for (i, result) in results.iter_mut().enumerate() {
                 if let Some(score) = scores.get(i) {
-                    result.score = *score;
+                    result.vector_distance = *score;
                 }
             }
 
-            results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+            results.sort_by(|a, b| {
+                b.cross_encoder_score
+                    .partial_cmp(&a.cross_encoder_score)
+                    .unwrap()
+            });
+        } else {
+            results.sort_by(|a, b| a.vector_distance.partial_cmp(&b.vector_distance).unwrap());
         }
 
         Ok(results)
@@ -153,8 +159,8 @@ mod tests {
     #[test]
     fn test_client_initialization() {
         let client = SearchClient::new(
-            "http://processor:3001".to_string(), 
-            "http://indexer:3002".to_string()
+            "http://processor:3001".to_string(),
+            "http://indexer:3002".to_string(),
         );
         assert_eq!(client.processor_url, "http://processor:3001");
         assert_eq!(client.indexer_url, "http://indexer:3002");
@@ -163,10 +169,10 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_embedding_network_error() {
         let client = SearchClient::new(
-            "http://localhost:65000".to_string(), 
-            "http://localhost:65000".to_string()
+            "http://localhost:65000".to_string(),
+            "http://localhost:65000".to_string(),
         );
-        
+
         let result = client.fetch_embedding("test query").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to contact processor"));
@@ -175,20 +181,18 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_search_results_handles_indexer_errors() {
         let mut server = Server::new_async().await;
-        
-        let _mock = server.mock("POST", "/search")
+
+        let _mock = server
+            .mock("POST", "/search")
             .with_status(500)
             .create_async()
             .await;
 
-        let client = SearchClient::new(
-            "http://localhost:3001".to_string(), 
-            server.url(),
-        );
+        let client = SearchClient::new("http://localhost:3001".to_string(), server.url());
 
         let dummy_vector = vec![0.1; 384];
         let result = client.fetch_search_results(dummy_vector, 5).await;
-        
+
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Indexer API error: 500"));
     }
