@@ -13,7 +13,7 @@
   - [Development & Testing](#development-testing)
     - [Running Tests](#running-tests)
     - [Benchmarking](#benchmarking)
-    - [Docker & Kubernetes (Coming Soon)](#docker-kubernetes-coming-soon)
+    - [Docker & Kubernetes](#docker-kubernetes)
   - [Contributing](#contributing)
   <!--toc:end-->
 
@@ -140,7 +140,7 @@ cargo bench
 
 Note: Results and HTML performance reports will be generated in `target/criterion`.
 
-### Docker & Kubernetes (Coming Soon)
+### Docker & Kubernetes
 
 Environment variables and scaling parameters are strictly managed via the Kubernetes manifest (`pythia-cluster.yaml`).
 
