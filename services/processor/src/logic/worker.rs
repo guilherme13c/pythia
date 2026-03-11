@@ -1,12 +1,13 @@
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::communication::publisher::{VectorMessage, VectorPublisher};
 use crate::data::blob_storage::BlobStorageReader;
 use crate::logic::embedder::{CHUNK_MAX_WORDS, CHUNK_OVERLAP_SENTENCES, Embedder, TextChunker};
 use crate::logic::extract;
 
+#[derive(Debug)]
 pub enum ProcessorMessage {
     ProcessDocument {
         url: String,
@@ -32,7 +33,7 @@ impl ProcessorActor {
         mime_type: String,
     ) {
         info!(
-            "⚙️ [Logic Layer] Processing document: {} (Blob: {})",
+            "[Logic Layer] Processing document: {} (Blob: {})",
             url, blob_id
         );
 
@@ -55,7 +56,16 @@ impl ProcessorActor {
         }
 
         info!("Embedding {} chunks for {}...", chunks.len(), url);
-        let Ok(embeddings) = state.embedder.embed_chunks(chunks.clone()) else {
+
+        let embedder_clone = state.embedder.clone();
+        let chunks_clone = chunks.clone();
+
+        let embeddings_result =
+            tokio::task::spawn_blocking(move || embedder_clone.embed_chunks(chunks_clone))
+                .await
+                .unwrap();
+
+        let Ok(embeddings) = embeddings_result else {
             error!("Failed to generate embeddings for {}", url);
             return;
         };
@@ -94,6 +104,8 @@ impl Actor for ProcessorActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        debug!("Received message: {:?}", message);
+
         match message {
             ProcessorMessage::ProcessDocument {
                 url,

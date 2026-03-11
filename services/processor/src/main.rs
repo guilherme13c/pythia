@@ -42,7 +42,14 @@ async fn handle_embed(
     Json(req): Json<EmbedRequest>,
 ) -> Json<EmbedResponse> {
     let chunks = vec![req.text];
-    let vectors = embedder.embed_chunks(chunks).unwrap_or_default();
+    let embedder_clone = embedder.clone();
+
+    let vectors = tokio::task::spawn_blocking(move || {
+        embedder_clone.embed_chunks(chunks).unwrap_or_default()
+    })
+    .await
+    .unwrap();
+
     Json(EmbedResponse {
         vector: vectors.get(0).cloned().unwrap_or_else(|| vec![0.0; 384]),
     })
@@ -52,9 +59,18 @@ async fn handle_rerank(
     State(embedder): State<Embedder>,
     Json(req): Json<RerankRequest>,
 ) -> Json<RerankResponse> {
-    let scores = embedder
-        .rerank_documents(&req.query, req.documents)
-        .unwrap_or_default();
+    let embedder_clone = embedder.clone();
+    let query = req.query;
+    let docs = req.documents;
+
+    let scores = tokio::task::spawn_blocking(move || {
+        embedder_clone
+            .rerank_documents(&query, docs)
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap();
+
     Json(RerankResponse { scores })
 }
 
@@ -63,6 +79,12 @@ async fn main() {
     info!("Bootstrapping Processor Service...");
 
     let config = ProcessorConfig::load();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
 
     info!("Loading FastEmbed model (this might take a few seconds)...");
     let embedder = Embedder::new(config.cache_path).expect("Failed to initialize FastEmbed");

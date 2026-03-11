@@ -4,9 +4,10 @@ use crate::logic::worker::WorkerMessage;
 use ractor::{Actor, ActorProcessingErr, ActorRef};
 use std::time::Duration;
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
+#[derive(Debug)]
 pub enum ManagerMessage {
     AddUrls(Vec<String>),
     RequestWork(String),
@@ -63,6 +64,8 @@ impl ManagerActor {
             let worker_ref: ActorRef<WorkerMessage> = worker_cell.into();
             if let Some(job) = next_job {
                 let _ = worker_ref.cast(job);
+            } else {
+                let _ = worker_ref.cast(WorkerMessage::NoWork);
             }
         }
     }
@@ -194,6 +197,8 @@ impl Actor for ManagerActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        debug!("Received message: {:?}", message);
+
         match message {
             ManagerMessage::AddUrls(urls) => self.handle_add_urls(state, urls),
             ManagerMessage::RequestWork(worker_name) => {

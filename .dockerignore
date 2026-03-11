@@ -1,0 +1,16 @@
+target/
+**/*.rs.bk
+
+.git/
+.gitignore
+
+.env
+
+libs/shared/data/
+data/
+.local_models/
+models/
+
+README.md
+LICENSE.txt
+CONTRIBUTING.md

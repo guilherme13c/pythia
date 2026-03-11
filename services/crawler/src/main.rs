@@ -3,14 +3,11 @@ use crawler::config::CrawlerConfig;
 use crawler::data::{blob_storage::DbBlobStorage, frontier::ManagerState};
 use crawler::logic::{
     manager::{ManagerActor, ManagerMessage},
-    worker::{WorkerActor, WorkerState, WorkerType, get_shard_index},
+    worker::{WorkerActor, WorkerState, WorkerType},
 };
-use headless_chrome::{Browser, LaunchOptions};
 use ractor::Actor;
 use std::sync::Arc;
-use tokio::time::Duration;
 use tracing::info;
-use url::Url;
 
 #[tokio::main]
 async fn main() {
@@ -23,6 +20,10 @@ async fn main() {
     info!("Bootstrapping Crawler Service...");
 
     let config = CrawlerConfig::load();
+    info!(
+        "Loaded config for Shard {}: {} dynamic workers, {} static workers",
+        config.shard_index, config.n_dynamic_workers, config.n_static_workers
+    );
 
     let blob_storage =
         Arc::new(DbBlobStorage::new(&config.blob_db_path).expect("Failed to init blob DB"));
@@ -32,42 +33,25 @@ async fn main() {
             .expect("Failed to connect to RabbitMQ"),
     );
 
-    let mut manager_refs = Vec::new();
+    let manager_state = ManagerState::with_db(&config.db_path, 10_000, 0.01);
+    let manager_name = format!("manager-{}", config.shard_index);
 
-    for i in 0..config.total_shards {
-        let manager_state = ManagerState::with_db(&config.db_path, 10_000, 0.01);
-        let manager_name = format!("manager-{}", i);
+    let (manager_ref, _) = Actor::spawn(Some(manager_name.clone()), ManagerActor, manager_state)
+        .await
+        .unwrap();
 
-        let (manager_ref, _) = Actor::spawn(Some(manager_name), ManagerActor, manager_state)
-            .await
-            .unwrap();
+    let mut worker_id = 1;
 
-        manager_refs.push(manager_ref);
-    }
-
-    for i in 1..=config.num_workers {
-        let worker_name = format!("worker-{}", i);
-        let shard_idx = i % config.total_shards;
-
-        let worker_type = if i == 1 {
-            let browser = Browser::new(
-                LaunchOptions::default_builder()
-                    .headless(true)
-                    .build()
-                    .expect("Failed to build LaunchOptions"),
-            )
-            .expect("Failed to launch headless chrome");
-            WorkerType::Dynamic(Arc::new(browser))
-        } else {
-            WorkerType::Static
-        };
+    for _ in 0..config.n_dynamic_workers {
+        let worker_name = format!("worker-dynamic-{}", worker_id);
+        worker_id += 1;
 
         let worker_state = WorkerState {
             http_client: reqwest::Client::new(),
             blob_storage: blob_storage.clone(),
             publisher: publisher.clone(),
-            worker_type,
-            shard_idx,
+            worker_type: WorkerType::Dynamic,
+            shard_idx: config.shard_index,
             total_shards: config.total_shards,
         };
 
@@ -75,17 +59,27 @@ async fn main() {
             .await
             .unwrap();
 
-        let _ = manager_refs[shard_idx].cast(ManagerMessage::RequestWork(worker_name));
+        let _ = manager_ref.cast(ManagerMessage::RequestWork(worker_name));
     }
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    for _ in 0..config.n_static_workers {
+        let worker_name = format!("worker-static-{}", worker_id);
+        worker_id += 1;
 
-    for url in config.seed_urls {
-        if let Ok(parsed) = Url::parse(&url) {
-            let domain = parsed.host_str().unwrap_or("");
-            let shard = get_shard_index(domain, config.total_shards);
-            let _ = manager_refs[shard].cast(ManagerMessage::AddUrls(vec![url]));
-        }
+        let worker_state = WorkerState {
+            http_client: reqwest::Client::new(),
+            blob_storage: blob_storage.clone(),
+            publisher: publisher.clone(),
+            worker_type: WorkerType::Static,
+            shard_idx: config.shard_index,
+            total_shards: config.total_shards,
+        };
+
+        Actor::spawn(Some(worker_name.clone()), WorkerActor, worker_state)
+            .await
+            .unwrap();
+
+        let _ = manager_ref.cast(ManagerMessage::RequestWork(worker_name));
     }
 
     tokio::signal::ctrl_c().await.unwrap();

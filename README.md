@@ -64,44 +64,48 @@ Pythia consists of four decoupled Rust microservices communicating via RabbitMQ:
 
 ## Getting Started (Local Development)
 
-1. Prerequisites
-   You will need Rust and Docker installed on your machine.
+### 1. Prerequisites
 
-2. Start the Message Broker
-   Pythia requires RabbitMQ to route messages between the microservices. Spin up
-   a local instance using Docker:
-
-```
-bash
-docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
-```
-
-(You can view the RabbitMQ management UI at <http://localhost:15672> with guest/guest).
-
-1. Pre-download AI Models
-   Before starting the services, download the gigabytes of embedding and reranking
-   models to your local cache:
+You will need Rust, Docker, kubectl, and k3d installed on your machine.
+Start by creating a local Kubernetes cluster:
 
 ```bash
-cargo run --bin download_models -p processor 4. Run the Microservices
+k3d cluster create pythia-cluster
 ```
 
-Because Pythia is a distributed system, you need to run the services
-concurrently. Open four separate terminal tabs and run:
+### 2. Build and Deploy
+
+Pythia is designed to run entirely inside Kubernetes. Build the
+unified Docker image and load it into your local cluster:
 
 ```bash
-RUST_LOG=info cargo run -p crawler
-RUST_LOG=info cargo run -p processor
-RUST_LOG=info cargo run -p indexer
-RUST_LOG=info cargo run -p query
+# Build the image
+docker build -t pythia:latest .
+
+# Import into k3d
+k3d image import pythia:latest -c pythia-cluster
+
+# Apply the cluster manifest (Storage, RabbitMQ, Browserless, and Pythia Services)
+kubectl apply -f pythia-cluster.yaml
 ```
 
-1. Perform a Search
-   Once the crawler has ingested some data, you can query the system via
-   the REST API:
+### 3. Seed the Crawler
+
+The crawler relies on an SQLite-backed frontier. Once the crawler-0 pod is
+running, inject your seed URLs directly into the database:
 
 ```bash
-curl "<http://localhost:4000/search?q=your+search+query&limit=5>"
+kubectl exec statefulset/crawler -- sqlite3 /data/frontier.db "INSERT OR IGNORE INTO urls (url, status) VALUES ('[https://www.rust-lang.org/](https://www.rust-lang.org/)', 'pending');"
+```
+
+The crawler will automatically wake up, fetch the page, and stream the data through the Processor and Indexer.
+
+### 4. Perform a Search
+
+Once the crawler has ingested and indexed some data, you can query the system via the exposed REST API (NodePort 30000):
+
+```bash
+curl "http://localhost:30000/search?q=rust+programming+language&limit=5"
 ```
 
 ## Development & Testing
@@ -113,7 +117,7 @@ integration test that spins up all microservices and a mock web server.
 
 ```bash
 # Run all unit tests
-cargo test
+cargo test --workspace --lib --bins
 
 # Run the E2E Microservice Pipeline test
 cargo test -p shared --test e2e_test
@@ -133,20 +137,16 @@ cargo bench
 
 Note: Results and HTML performance reports will be generated in `target/criterion`.
 
-### Configuration (`.env`)
-
-Environment variables are managed via `dotenvy`. A root `.env` file provides
-shared variables (like `AMQP_ADDR`, `RUST_LOG`, and internal routing URLs),
-while service-specific `.env` files define individual ports and scaling
-factors (e.g., `CRAWLER_SHARDS`).
-
 ### Docker & Kubernetes (Coming Soon)
 
-The migration to microservices was done specifically to support container
-orchestration. Dockerfiles and Helm charts/Kubernetes manifests for
-deploying Pythia to a distributed cluster are currently under
-active development!
+Environment variables and scaling parameters are strictly managed via the Kubernetes manifest (`pythia-cluster.yaml`).
+
+To scale the crawler, you can adjust the `N_DYNAMIC_WORKERS` and
+`N_STATIC_WORKERS` environment variables on the _StatefulSet_,
+or increase the `replicas` count to spawn entirely new Shards.
 
 ## Contributing
 
-Contributions are welcome! Please check the issues page (look for good first issue if you're new to the codebase). See `CONTRIBUTING.md` for details on how to jump in.
+Contributions are welcome! Please check the issues page (look for good first
+issue if you're new to the codebase). See `CONTRIBUTING.md` for details on
+how to jump in.

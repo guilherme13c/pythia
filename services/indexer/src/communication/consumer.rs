@@ -24,6 +24,18 @@ pub async fn start_vector_consumer(amqp_addr: &str, indexer_ref: ActorRef<Indexe
         .await
         .expect("Failed to create channel");
 
+    channel
+        .queue_declare(
+            "vector_queue".into(),
+            QueueDeclareOptions {
+                durable: true,
+                ..Default::default()
+            },
+            FieldTable::default(),
+        )
+        .await
+        .expect("Failed to declare vector_queue");
+
     let mut consumer = channel
         .basic_consume(
             "vector_queue".into(),

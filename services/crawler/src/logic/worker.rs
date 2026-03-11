@@ -9,17 +9,19 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use url::Url;
 
+#[derive(Debug)]
 pub enum WorkerMessage {
     Fetch(String),
     FetchRobotsTxt(String, String),
+    NoWork,
 }
 
 pub enum WorkerType {
     Static,
-    Dynamic(Arc<Browser>),
+    Dynamic,
 }
 
 pub struct WorkerState {
@@ -56,7 +58,7 @@ impl WorkerActor {
     async fn execute_fetch(&self, state: &WorkerState, url: &str) -> FetchResult {
         match &state.worker_type {
             WorkerType::Static => self.fetch_static(&state.http_client, url).await,
-            WorkerType::Dynamic(browser) => self.fetch_dynamic(browser, url).await,
+            WorkerType::Dynamic => self.fetch_dynamic(url).await,
         }
     }
 
@@ -90,12 +92,14 @@ impl WorkerActor {
         }
     }
 
-    async fn fetch_dynamic(&self, browser: &Arc<Browser>, url: &str) -> FetchResult {
-        let b = browser.clone();
+    async fn fetch_dynamic(&self, url: &str) -> FetchResult {
         let u = url.to_string();
 
         let res = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
-            let tab = b.new_tab().map_err(|e| e.to_string())?;
+            let browser = Browser::connect("ws://browserless:3000".to_string())
+                .map_err(|e| format!("Failed to connect to browserless: {}", e))?;
+
+            let tab = browser.new_tab().map_err(|e| e.to_string())?;
             tab.navigate_to(&u).map_err(|e| e.to_string())?;
             tab.wait_until_navigated().map_err(|e| e.to_string())?;
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -124,7 +128,7 @@ impl WorkerActor {
     ) {
         let mode_str = match state.worker_type {
             WorkerType::Static => "Static",
-            WorkerType::Dynamic(_) => "Dynamic",
+            WorkerType::Dynamic => "Dynamic",
         };
         info!("[Logic Layer] Worker fetching: {} ({})", url, mode_str);
 
@@ -224,6 +228,14 @@ impl WorkerActor {
             ManagerMessage::RequestWork(myself.get_name().unwrap()),
         );
     }
+
+    async fn handle_no_work(&self, state: &mut WorkerState, myself: ActorRef<WorkerMessage>) {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        self.send_to_manager_shard(
+            state.shard_idx,
+            ManagerMessage::RequestWork(myself.get_name().unwrap()),
+        );
+    }
 }
 
 impl Actor for WorkerActor {
@@ -245,11 +257,14 @@ impl Actor for WorkerActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        debug!("Received message: {:?}", message);
+
         match message {
             WorkerMessage::Fetch(url) => self.handle_fetch(state, myself, url).await,
             WorkerMessage::FetchRobotsTxt(domain, url) => {
                 self.handle_fetch_robots(state, myself, domain, url).await
             }
+            WorkerMessage::NoWork => self.handle_no_work(state, myself).await,
         }
         Ok(())
     }

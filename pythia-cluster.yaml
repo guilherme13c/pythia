@@ -1,0 +1,311 @@
+---
+# 1. Shared Persistent Storage (For SQLite Blobs & LanceDB)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pythia-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+# 2. RabbitMQ Broker
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3-management
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+spec:
+  selector:
+    app: rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    - name: management
+      port: 15672
+      targetPort: 15672
+
+---
+# 3. Indexer Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: indexer
+  template:
+    metadata:
+      labels:
+        app: indexer
+    spec:
+      containers:
+        - name: indexer
+          image: pythia:latest
+          imagePullPolicy: Never
+          command: ["/app/indexer"]
+          env:
+            - name: INDEXER_PORT
+              value: "3002"
+            - name: LANCEDB_URI
+              value: "/data/lancedb_store"
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: pythia-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: indexer
+spec:
+  selector:
+    app: indexer
+  ports:
+    - port: 3002
+
+---
+# 4. Processor Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: processor
+  template:
+    metadata:
+      labels:
+        app: processor
+    spec:
+      containers:
+        - name: processor
+          image: pythia:latest
+          imagePullPolicy: Never
+          command: ["/app/processor"]
+          env:
+            - name: PROCESSOR_PORT
+              value: "3001"
+            - name: BLOB_DB_PATH
+              value: "/data/blobs.db"
+            - name: FASTEMBED_CACHE_PATH
+              value: "/data/models"
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "800m"
+              memory: "4096Mi"
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: pythia-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: processor
+spec:
+  selector:
+    app: processor
+  ports:
+    - port: 3001
+
+---
+# 5. Crawler Service (StatefulSet for Shard Routing!)
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: crawler
+spec:
+  serviceName: "crawler"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crawler
+  template:
+    metadata:
+      labels:
+        app: crawler
+    spec:
+      containers:
+        - name: crawler
+          image: pythia:latest
+          imagePullPolicy: Never
+          command: ["/app/crawler"]
+          env:
+            - name: CRAWLER_DB_PATH
+              value: "/data/frontier.db"
+            - name: BLOB_DB_PATH
+              value: "/data/blobs.db"
+            - name: CRAWLER_TOTAL_SHARDS
+              value: "1"
+            - name: N_DYNAMIC_WORKERS
+              value: "1"
+            - name: N_STATIC_WORKERS
+              value: "2"
+            - name: AMQP_ADDR
+              value: "amqp://rabbitmq:5672/%2f"
+          volumeMounts:
+            - name: data-volume
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "400m"
+              memory: "512Mi"
+      volumes:
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: pythia-data-pvc
+
+---
+# 6. Query Service (Exposed to the outside world)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: query
+  template:
+    metadata:
+      labels:
+        app: query
+    spec:
+      containers:
+        - name: query
+          image: pythia:latest
+          imagePullPolicy: Never
+          command: ["/app/query"]
+          env:
+            - name: PORT
+              value: "4000"
+            - name: PROCESSOR_URL
+              value: "http://processor:3001"
+            - name: INDEXER_URL
+              value: "http://indexer:3002"
+          resources:
+            requests:
+              cpu: "20m"
+              memory: "64Mi"
+            limits:
+              cpu: "100m"
+              memory: "256Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: query
+spec:
+  type: NodePort
+  selector:
+    app: query
+  ports:
+    - port: 4000
+      targetPort: 4000
+      nodePort: 30000
+---
+# Browserless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: browserless
+spec:
+  selector:
+    app: browserless
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+# Browserless Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browserless
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: browserless
+  template:
+    metadata:
+      labels:
+        app: browserless
+    spec:
+      containers:
+        - name: browserless
+          image: browserless/chrome:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: MAX_CONCURRENT_SESSIONS
+              value: "2"
+            - name: MAX_QUEUE_LENGTH
+              value: "10"
+            - name: PREBOOT_CHROME
+              value: "true"
+            - name: PREBOOT_QUANTITY
+              value: "2"
+            - name: DEFAULT_HEADLESS
+              value: "true"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "768Mi"

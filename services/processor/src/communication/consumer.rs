@@ -22,6 +22,18 @@ pub async fn start_document_consumer(amqp_addr: &str, processor_ref: ActorRef<Pr
         .await
         .expect("Failed to create channel");
 
+    channel
+        .queue_declare(
+            "document_queue".into(),
+            QueueDeclareOptions {
+                durable: true,
+                ..Default::default()
+            },
+            FieldTable::default(),
+        )
+        .await
+        .expect("Failed to declare document_queue");
+
     let mut consumer = channel
         .basic_consume(
             "document_queue".into(),

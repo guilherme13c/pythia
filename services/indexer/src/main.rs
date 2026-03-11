@@ -13,6 +13,12 @@ async fn main() {
 
     let config = IndexerConfig::load();
 
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
     info!("Connecting to LanceDB at {}...", config.lancedb_uri);
     let store = LanceDbStore::new(&config.lancedb_uri, &config.lancedb_table)
         .await
