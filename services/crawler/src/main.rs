@@ -2,8 +2,9 @@ use crawler::communication::publisher::RabbitMqPublisher;
 use crawler::config::CrawlerConfig;
 use crawler::data::{blob_storage::DbBlobStorage, frontier::ManagerState};
 use crawler::logic::{
+    fetcher::{dynamic_fetcher::DynamicFetcher, static_fetcher::StaticFetcher},
     manager::{ManagerActor, ManagerMessage},
-    worker::{WorkerActor, WorkerState, WorkerType},
+    worker::{WorkerActor, WorkerState},
 };
 use ractor::Actor;
 use std::sync::Arc;
@@ -47,10 +48,12 @@ async fn main() {
         worker_id += 1;
 
         let worker_state = WorkerState {
-            http_client: reqwest::Client::new(),
+            fetcher: Box::new(DynamicFetcher {
+                browserless_url: config.browserless_url.clone(),
+                http_client: reqwest::Client::new(),
+            }),
             blob_storage: blob_storage.clone(),
             publisher: publisher.clone(),
-            worker_type: WorkerType::Dynamic,
             shard_idx: config.shard_index,
             total_shards: config.total_shards,
         };
@@ -67,10 +70,11 @@ async fn main() {
         worker_id += 1;
 
         let worker_state = WorkerState {
-            http_client: reqwest::Client::new(),
+            fetcher: Box::new(StaticFetcher {
+                http_client: reqwest::Client::new(),
+            }),
             blob_storage: blob_storage.clone(),
             publisher: publisher.clone(),
-            worker_type: WorkerType::Static,
             shard_idx: config.shard_index,
             total_shards: config.total_shards,
         };
