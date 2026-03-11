@@ -1,6 +1,7 @@
 use fastembed::{EmbeddingModel, InitOptions, RerankInitOptions, TextEmbedding, TextRerank};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub const CHUNK_MAX_WORDS: usize = 200;
 pub const CHUNK_OVERLAP_SENTENCES: usize = 2;
@@ -13,21 +14,11 @@ impl TextChunker {
     }
 
     pub fn separate_sentences(clean_text: &str) -> Vec<String> {
-        let mut sentences = Vec::new();
-        let mut current_sentence = String::new();
-
-        for c in clean_text.chars() {
-            current_sentence.push(c);
-            if c == '.' || c == '!' || c == '?' {
-                sentences.push(current_sentence.trim().to_string());
-                current_sentence.clear();
-            }
-        }
-        if !current_sentence.trim().is_empty() {
-            sentences.push(current_sentence.trim().to_string());
-        }
-
-        sentences
+        clean_text
+            .unicode_sentences()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     pub fn chunk_text(clean_text: &str, max_words: usize, overlap_sentences: usize) -> Vec<String> {
@@ -191,5 +182,22 @@ mod tests {
             chunks[2],
             "Sentence three. Sentence four is longer. Sentence five."
         );
+    }
+
+    #[test]
+    fn test_separate_sentences_with_abbreviations() {
+        let text = "Dr. Smith works at OpenAI in the U.S.A. He earns $1.5 million per year! Is that true? Yes, e.g. his tax returns show it.";
+        let sentences = TextChunker::separate_sentences(text);
+
+        assert_eq!(
+            sentences.len(),
+            5,
+            "Should correctly handle decimals and lowercase abbreviations"
+        );
+        assert_eq!(sentences[0], "Dr.");
+        assert_eq!(sentences[1], "Smith works at OpenAI in the U.S.A.");
+        assert_eq!(sentences[2], "He earns $1.5 million per year!");
+        assert_eq!(sentences[3], "Is that true?");
+        assert_eq!(sentences[4], "Yes, e.g. his tax returns show it.");
     }
 }

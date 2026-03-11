@@ -152,6 +152,8 @@ impl LanceDbStore {
         let text_array = Self::get_string_array(batch, "text");
         let title_array = Self::get_string_array(batch, "title");
 
+        let desc_array = Self::get_string_array(batch, "description");
+
         let score_col = if is_vector { "_distance" } else { "_score" };
         let score_array = batch
             .column_by_name(score_col)
@@ -161,17 +163,33 @@ impl LanceDbStore {
             .unwrap();
 
         (0..batch.num_rows())
-            .map(|i| SearchResult {
-                url: url_array.value(i).to_string(),
-                text: text_array.value(i).to_string(),
-                title: if title_array.is_null(i) {
-                    None
+            .map(|i| {
+                let text = text_array.value(i).to_string();
+
+                let snippet = if text.chars().count() > 160 {
+                    let mut s: String = text.chars().take(160).collect();
+                    s.push_str("...");
+                    s
                 } else {
-                    Some(title_array.value(i).to_string())
-                },
-                description: Some("".to_string()),
-                score: score_array.value(i),
-                snippet: "".to_string(),
+                    text.clone()
+                };
+
+                SearchResult {
+                    url: url_array.value(i).to_string(),
+                    text,
+                    title: if title_array.is_null(i) {
+                        None
+                    } else {
+                        Some(title_array.value(i).to_string())
+                    },
+                    description: if desc_array.is_null(i) {
+                        None
+                    } else {
+                        Some(desc_array.value(i).to_string())
+                    },
+                    score: score_array.value(i),
+                    snippet,
+                }
             })
             .collect()
     }
@@ -248,6 +266,47 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "Chunks and embeddings length mismatch");
+
+        let _ = fs::remove_dir_all(db_path);
+    }
+
+    #[tokio::test]
+    async fn test_search_and_parse_snippets() {
+        let db_path = get_test_db_path();
+        let table_name = "snippet_test_table";
+
+        let store = LanceDbStore::new(&db_path, table_name)
+            .await
+            .expect("Failed to initialize LanceDB store");
+
+        let url = "https://example.com";
+        let title = Some("Test Title");
+        let description = Some("This is a test description that should be preserved.");
+
+        let long_text = "This is a very long text chunk that intentionally exceeds one hundred and sixty characters to test if the snippet generation logic correctly truncates it and adds an ellipsis.";
+
+        let chunks = vec![long_text.to_string()];
+        let embeddings = vec![vec![0.5f32; VECTOR_DIMENSIONS as usize]];
+
+        store
+            .insert_chunks(url, title, description, chunks, embeddings.clone())
+            .await
+            .unwrap();
+
+        let results = store.search_vector(embeddings[0].clone(), 1).await.unwrap();
+
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+
+        assert_eq!(
+            result.description.as_deref(),
+            Some("This is a test description that should be preserved.")
+        );
+
+        assert!(result.snippet.ends_with("..."));
+        assert_eq!(result.snippet.chars().count(), 163);
+
+        assert_eq!(result.text, long_text);
 
         let _ = fs::remove_dir_all(db_path);
     }
