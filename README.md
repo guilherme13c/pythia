@@ -10,10 +10,10 @@
     - [2. Build and Deploy](#2-build-and-deploy)
     - [3. Seed the Crawler](#3-seed-the-crawler)
     - [4. Perform a Search](#4-perform-a-search)
-  - [Development & Testing](#development-testing)
+  - [Development & Testing](#development-&-testing)
     - [Running Tests](#running-tests)
     - [Benchmarking](#benchmarking)
-    - [Docker & Kubernetes](#docker-kubernetes)
+    - [Docker & Kubernetes](#docker-&-kubernetes)
   - [Contributing](#contributing)
   <!--toc:end-->
 
