@@ -1,3 +1,5 @@
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_tracing::TracingMiddleware;
 use serde::{Deserialize, Serialize};
 use shared::models::SearchResult;
 
@@ -15,7 +17,7 @@ pub struct EmbedResponse {
 pub struct SearchClient {
     pub processor_url: String,
     pub indexer_url: String,
-    pub http: reqwest::Client,
+    pub http: ClientWithMiddleware,
 }
 
 #[derive(Serialize)]
@@ -31,10 +33,15 @@ pub struct RerankResponse {
 
 impl SearchClient {
     pub fn new(processor_url: String, indexer_url: String) -> Self {
+        let reqwest_client = reqwest::Client::new();
+        let tracing_client = ClientBuilder::new(reqwest_client)
+            .with(TracingMiddleware::default())
+            .build();
+
         Self {
             processor_url,
             indexer_url,
-            http: reqwest::Client::new(),
+            http: tracing_client,
         }
     }
 
@@ -56,7 +63,7 @@ impl SearchClient {
         if let Ok(scores) = self.fetch_rerank(query_text, documents).await {
             for (i, result) in results.iter_mut().enumerate() {
                 if let Some(score) = scores.get(i) {
-                    result.vector_distance = *score;
+                    result.cross_encoder_score = *score;
                 }
             }
 

@@ -1,7 +1,9 @@
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Query, State},
     http::StatusCode,
+    response::Response,
     routing::get,
 };
 use query::config::QueryConfig;
@@ -9,6 +11,8 @@ use query::logic::client::SearchClient;
 use serde::Deserialize;
 use shared::models::SearchResult;
 use std::sync::Arc;
+use std::time::Duration;
+use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
 #[derive(Deserialize)]
@@ -25,18 +29,17 @@ struct AppState {
 async fn main() {
     let config = QueryConfig::load();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    let tracer_provider =
+        shared::telemetry::init_telemetry("query-service", config.otlp_endpoint.clone());
 
     let client = SearchClient::new(config.processor_url, config.indexer_url);
     let state = Arc::new(AppState { client });
 
     let app = Router::new()
         .route("/search", get(search_handler))
-        .with_state(state);
+        .route("/debug/pprof/profile", get(profile))
+        .with_state(state)
+        .layer(TraceLayer::new_for_http());
 
     let bind_addr = format!("0.0.0.0:{}", config.port);
 
@@ -46,6 +49,10 @@ async fn main() {
         config.port
     );
     axum::serve(listener, app).await.unwrap();
+
+    if let Some(provider) = tracer_provider {
+        let _ = provider.shutdown();
+    }
 }
 
 async fn search_handler(
@@ -71,4 +78,23 @@ async fn search_handler(
             ))
         }
     }
+}
+
+async fn profile() -> Response<Body> {
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(100)
+        .build()
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(10)).await;
+
+    if let Ok(report) = guard.report().build() {
+        let mut body = Vec::new();
+        report.flamegraph(&mut body).unwrap();
+        return Response::builder()
+            .header("Content-Type", "image/svg+xml")
+            .body(Body::from(body))
+            .unwrap();
+    }
+    Response::builder().status(500).body(Body::empty()).unwrap()
 }

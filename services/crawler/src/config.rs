@@ -10,6 +10,7 @@ pub struct CrawlerConfig {
     pub blob_db_path: String,
     pub amqp_addr: String,
     pub browserless_url: String,
+    pub otlp_endpoint: Option<String>,
 }
 
 impl CrawlerConfig {
@@ -44,6 +45,7 @@ impl CrawlerConfig {
                 .unwrap_or_else(|_| "amqp://rabbitmq:5672/%2f".to_string()),
             browserless_url: std::env::var("BROWSERLESS_WS_URL")
                 .unwrap_or_else(|_| "ws://browserless:3000".to_string()),
+            otlp_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
         }
     }
 }

@@ -14,6 +14,10 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 lapin = { workspace = true }
 serde_json = { workspace = true }
+tower-http = { workspace = true }
+reqwest-tracing = { workspace = true }
+reqwest-middleware = { workspace = true }
+pprof = { workspace = true, features = ["flamegraph"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

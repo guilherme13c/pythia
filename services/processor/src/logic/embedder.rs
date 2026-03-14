@@ -1,4 +1,7 @@
-use fastembed::{EmbeddingModel, InitOptions, RerankInitOptions, TextEmbedding, TextRerank};
+use fastembed::{
+    EmbeddingModel, InitOptions, RerankInitOptions, RerankerModel, TextEmbedding, TextRerank,
+};
+use ort::ep::{CPU, CUDA};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use unicode_segmentation::UnicodeSegmentation;
@@ -88,12 +91,18 @@ impl Embedder {
         let cache_path = PathBuf::from(cache_dir);
 
         let embedding = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_path.clone()),
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+                .with_execution_providers(vec![CUDA::default().build(), CPU::default().build()])
+                .with_cache_dir(cache_path.clone()),
         )
         .map_err(|e| format!("Failed to load fastembed model: {:?}", e))?;
 
-        let reranker = TextRerank::try_new(RerankInitOptions::default().with_cache_dir(cache_path))
-            .map_err(|e| format!("Failed to load rerank model: {:?}", e))?;
+        let reranker = TextRerank::try_new(
+            RerankInitOptions::new(RerankerModel::BGERerankerBase)
+                .with_execution_providers(vec![CUDA::default().build(), CPU::default().build()])
+                .with_cache_dir(cache_path.clone()),
+        )
+        .map_err(|e| format!("Failed to load rerank model: {:?}", e))?;
 
         Ok(Self {
             embedding_model: Arc::new(Mutex::new(embedding)),

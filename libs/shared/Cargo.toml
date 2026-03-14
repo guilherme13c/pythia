@@ -7,6 +7,14 @@ edition = "2024"
 serde = { workspace = true }
 stop-words = "0.10.0"
 rust-stemmers = "1.2.0"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "registry"] }
+tracing-opentelemetry = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "trace"] }
+tonic = { workspace = true }
+lapin = { workspace = true }
 
 [dev-dependencies]
 mockito = "1.7.2"

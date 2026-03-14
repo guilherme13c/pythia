@@ -13,11 +13,8 @@ async fn main() {
 
     let config = IndexerConfig::load();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    let tracer_provider =
+        shared::telemetry::init_telemetry("indexer-service", config.otlp_endpoint.clone());
 
     info!("Connecting to LanceDB at {}...", config.lancedb_uri);
     let store = LanceDbStore::new(&config.lancedb_uri, &config.lancedb_table)
@@ -36,4 +33,8 @@ async fn main() {
     start_vector_consumer(&config.amqp_addr, actor_ref.clone()).await;
 
     start_api_server(config.port, actor_ref).await;
+
+    if let Some(provider) = tracer_provider {
+        let _ = provider.shutdown();
+    }
 }

@@ -6,6 +6,7 @@ pub struct IndexerConfig {
     pub lancedb_uri: String,
     pub lancedb_table: String,
     pub amqp_addr: String,
+    pub otlp_endpoint: Option<String>,
 }
 
 impl IndexerConfig {
@@ -22,6 +23,7 @@ impl IndexerConfig {
             lancedb_table: env::var("LANCEDB_TABLE").unwrap_or_else(|_| "documents".to_string()),
             amqp_addr: std::env::var("AMQP_ADDR")
                 .unwrap_or_else(|_| "amqp://127.0.0.1:5672/%2f".to_string()),
+            otlp_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok(),
         }
     }
 }
