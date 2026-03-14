@@ -1,9 +1,12 @@
 use crate::logic::worker::ProcessorMessage;
 use futures::StreamExt;
 use lapin::{Connection, ConnectionProperties, options::*, types::FieldTable};
+use opentelemetry::global;
 use ractor::ActorRef;
 use serde::Deserialize;
-use tracing::{error, info};
+use shared::telemetry::AmqpExtractor;
+use tracing::{Instrument, error, info, info_span};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Deserialize, Debug)]
 pub struct DocumentPayload {
@@ -50,23 +53,41 @@ pub async fn start_document_consumer(amqp_addr: &str, processor_ref: ActorRef<Pr
         while let Some(delivery) = consumer.next().await {
             match delivery {
                 Ok(delivery) => {
-                    if let Ok(payload) = serde_json::from_slice::<DocumentPayload>(&delivery.data) {
-                        let msg = ProcessorMessage::ProcessDocument {
-                            url: payload.url,
-                            blob_id: payload.blob_id,
-                            mime_type: payload.mime_type,
-                        };
+                    let empty_headers = FieldTable::default();
+                    let headers = delivery
+                        .properties
+                        .headers()
+                        .as_ref()
+                        .unwrap_or(&empty_headers);
+                    let parent_cx = global::get_text_map_propagator(|propagator| {
+                        propagator.extract(&AmqpExtractor(headers))
+                    });
+                    let consume_span = info_span!("consume_rabbitmq_message");
+                    let _ = consume_span.set_parent(parent_cx);
 
-                        if let Err(e) = processor_ref.cast(msg) {
-                            error!("Failed to route message to Processor Actor: {}", e);
-                            let _ = delivery.nack(BasicNackOptions::default()).await;
+                    async {
+                        if let Ok(payload) =
+                            serde_json::from_slice::<DocumentPayload>(&delivery.data)
+                        {
+                            let msg = ProcessorMessage::ProcessDocument {
+                                url: payload.url,
+                                blob_id: payload.blob_id,
+                                mime_type: payload.mime_type,
+                            };
+
+                            if let Err(e) = processor_ref.cast(msg) {
+                                error!("Failed to route message to Processor Actor: {}", e);
+                                let _ = delivery.nack(BasicNackOptions::default()).await;
+                            } else {
+                                let _ = delivery.ack(BasicAckOptions::default()).await;
+                            }
                         } else {
-                            let _ = delivery.ack(BasicAckOptions::default()).await;
+                            error!("Failed to deserialize DocumentPayload");
+                            let _ = delivery.nack(BasicNackOptions::default()).await;
                         }
-                    } else {
-                        error!("Failed to deserialize DocumentPayload");
-                        let _ = delivery.nack(BasicNackOptions::default()).await;
                     }
+                    .instrument(consume_span)
+                    .await;
                 }
                 Err(e) => error!("Error in RabbitMQ consumer stream: {:?}", e),
             }

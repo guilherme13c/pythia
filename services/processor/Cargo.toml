@@ -16,13 +16,17 @@ pdf-extract = { workspace = true }
 url = { workspace = true }
 axum = { workspace = true }
 dotenvy = { workspace = true }
+opentelemetry = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rusqlite = { workspace = true }
-lapin = "4.2.1"
+lapin = { workspace = true }
 serde_json.workspace = true
 futures = { workspace = true }
 unicode-segmentation = "1.12.0"
+tower-http = { workspace = true }
+ort = { version = "2.0.0-rc.11", features = ["cuda"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

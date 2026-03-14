@@ -1,9 +1,12 @@
 use lapin::{
     BasicProperties, Channel, Connection, ConnectionProperties, options::*, types::FieldTable,
 };
+use opentelemetry::global;
 use serde::Serialize;
+use shared::telemetry::AmqpInjector;
 use std::future::Future;
 use std::pin::Pin;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct VectorMessage {
@@ -59,16 +62,24 @@ impl VectorPublisher for RabbitMqVectorPublisher {
         Box::pin(async move {
             let payload = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
 
+            let mut headers = FieldTable::default();
+            global::get_text_map_propagator(|propagator| {
+                let cx = tracing::Span::current().context();
+                propagator.inject_context(&cx, &mut AmqpInjector(&mut headers))
+            });
+
             channel
                 .basic_publish(
                     "".into(),
-                    "vector_queue".into(),
+                    "document_queue".into(),
                     BasicPublishOptions::default(),
                     &payload,
-                    BasicProperties::default().with_delivery_mode(2),
+                    BasicProperties::default()
+                        .with_delivery_mode(2)
+                        .with_headers(headers),
                 )
                 .await
-                .map_err(|e| format!("Failed to publish vectors to RabbitMQ: {}", e))?;
+                .map_err(|e| format!("Failed to publish: {}", e))?;
 
             Ok(())
         })

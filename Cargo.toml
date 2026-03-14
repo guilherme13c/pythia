@@ -30,9 +30,19 @@ arrow-schema = "57.3.0"
 arrow-cast = "57.3.0"
 dotenvy = "0.15.7"
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+tracing-opentelemetry = "0.32.1"
+opentelemetry = "0.31.0"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31.0", features = ["tonic"] }
+tonic = "0.14.5"
 criterion = "0.8.2"
 lapin = "4.2.1"
+tower-http = { version = "0.6.8", features = ["trace"] }
+reqwest-tracing = "0.5.8"
+reqwest-middleware = { version = "0.4.2", features = ["json"] }
+async-trait = "0.1.89"
+pprof = { version = "0.15.0", features = ["flamegraph"] }
 
 # Shared Internal Lib
 shared = { path = "libs/shared" }

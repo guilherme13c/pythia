@@ -7,6 +7,7 @@ use axum::{
 use ractor::ActorRef;
 use serde::Deserialize;
 use shared::models::SearchResult;
+use tower_http::trace::TraceLayer;
 
 #[derive(Deserialize)]
 pub struct SearchRequest {
@@ -17,12 +18,14 @@ pub struct SearchRequest {
 pub async fn start_api_server(port: u16, actor_ref: ActorRef<IndexerMessage>) {
     let app = Router::new()
         .route("/search", post(handle_search))
-        .with_state(actor_ref);
+        .with_state(actor_ref)
+        .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
         .await
         .unwrap();
-    println!("📡 Indexer API listening on port {}", port);
+
+    println!("Indexer API listening on port {}", port);
     axum::serve(listener, app).await.unwrap();
 }
 

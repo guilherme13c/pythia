@@ -12,19 +12,12 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
     info!("Bootstrapping Crawler Service...");
 
     let config = CrawlerConfig::load();
-    info!(
-        "Loaded config for Shard {}: {} dynamic workers, {} static workers",
-        config.shard_index, config.n_dynamic_workers, config.n_static_workers
-    );
+
+    let tracer_provider =
+        shared::telemetry::init_telemetry("crawler-service", config.otlp_endpoint.clone());
 
     let blob_storage =
         Arc::new(DbBlobStorage::new(&config.blob_db_path).expect("Failed to init blob DB"));
@@ -88,4 +81,8 @@ async fn main() {
 
     tokio::signal::ctrl_c().await.unwrap();
     info!("Shutting down Crawler Service...");
+
+    if let Some(provider) = tracer_provider {
+        let _ = provider.shutdown();
+    }
 }

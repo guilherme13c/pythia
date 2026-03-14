@@ -14,6 +14,7 @@ use processor::logic::{
 };
 use ractor::Actor;
 use std::sync::Arc;
+use tower_http::trace::TraceLayer;
 use tracing::info;
 
 #[derive(serde::Deserialize)]
@@ -80,11 +81,8 @@ async fn main() {
 
     let config = ProcessorConfig::load();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    let tracer_provider =
+        shared::telemetry::init_telemetry("processor-service", config.otlp_endpoint.clone());
 
     info!("Loading FastEmbed model (this might take a few seconds)...");
     let embedder = Embedder::new(config.cache_path).expect("Failed to initialize FastEmbed");
@@ -119,10 +117,15 @@ async fn main() {
     let app = Router::new()
         .route("/embed", post(handle_embed))
         .route("/rerank", post(handle_rerank))
-        .with_state(embedder.clone());
+        .with_state(embedder.clone())
+        .layer(TraceLayer::new_for_http());
 
     let bind_addr = format!("0.0.0.0:{}", config.port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
     info!("Processor API listening on port {}", config.port);
     axum::serve(listener, app).await.unwrap();
+
+    if let Some(provider) = tracer_provider {
+        let _ = provider.shutdown();
+    }
 }

@@ -18,11 +18,13 @@ headless_chrome = { workspace = true }
 lopdf = { workspace = true }
 quick-xml = { workspace = true }
 dotenvy = { workspace = true }
+opentelemetry = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 lapin = { workspace = true }
 serde_json = { workspace = true }
-async-trait = "0.1.89"
+async-trait = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
